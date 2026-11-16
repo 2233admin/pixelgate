@@ -55,7 +55,8 @@ input[type=range] { width:100%; }
 const report = JSON.parse(document.getElementById('data').textContent);
 const STATUSES = ['changed', 'error', 'removed', 'added', 'updated', 'unchanged'];
 const s = report.summary;
-const findings = (r) => [r.pageErrors?.length && 'pageErrors', r.a11y?.length && 'a11y', r.overflowPx && 'overflow'].filter(Boolean);
+const findings = (r) => [r.pageErrors?.length && 'pageErrors', r.a11y?.length && 'a11y', r.overflowPx && 'overflow', r.consoleErrors?.length && 'consoleErrors', r.httpErrors?.length && 'httpErrors'].filter(Boolean);
+const more = (n) => (n ? '\\n(+' + n + ' more)' : '');
 // Capture notes: compared only up to the size cap, or pseudo-classes not forced everywhere.
 const noted = (r) => findings(r).length > 0 || !!r.capped || !!r.unreadableStylesheets?.length;
 const withChecks = report.results.filter(noted).length;
@@ -105,6 +106,11 @@ function card(r) {
   const c = el('section', { class: 'card' }, [head]);
   if (r.error) c.append(el('div', { class: 'err', text: r.error }));
   if (r.pageErrors?.length) c.append(el('div', { class: 'err', text: 'page errors:\\n' + r.pageErrors.join('\\n') }));
+  if (r.consoleErrors?.length) c.append(el('div', { class: 'err', text: 'console errors:\\n' + r.consoleErrors.join('\\n') + more(r.consoleErrorsDropped) }));
+  if (r.httpErrors?.length) {
+    const line = (h) => (h.status || h.failure) + ' ' + h.method + ' ' + h.url + ' (' + h.resourceType + ')';
+    c.append(el('div', { class: 'err', text: 'failed requests:\\n' + r.httpErrors.map(line).join('\\n') + more(r.httpErrorsDropped) }));
+  }
   if (r.blocked?.length) c.append(el('div', { class: 'err', text: 'blocked requests to: ' + r.blocked.join(', ') }));
   if (r.unreadableStylesheets?.length) c.append(el('div', { class: 'err', text: 'pseudo-classes not forced in unreadable stylesheets: ' + r.unreadableStylesheets.join(', ') }));
   if (r.overflowPx) c.append(el('div', { class: 'err', text: 'overflow: the page reaches ' + r.overflowPx + 'px past the right edge of the viewport' }));

@@ -9,6 +9,6 @@ export default defineConfig<{ pixelgateOptions: PixelgateOptions }>({
   // A consumer writes 'pixelgate/playwright-reporter'; Playwright resolves reporters from its own
   // location, where this repo's package self-reference does not apply.
   reporter: [['list'], ['../../../dist/playwright-reporter.js']],
-  use: { pixelgateOptions: { ariaSnapshot: true } },
+  use: { pixelgateOptions: { ariaSnapshot: true, checks: { consoleErrors: true } } },
   projects: [{ name: 'desktop', use: { browserName: 'chromium', viewport: { width: 400, height: 300 } } }],
 });

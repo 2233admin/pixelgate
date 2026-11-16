@@ -37,6 +37,20 @@ export interface AriaResult {
   truncated?: boolean;
 }
 
+/** A request that got a status of 400 or more (`status`), or none at all (`failure`). */
+export interface HttpError {
+  url: string;
+  method: string;
+  /** Playwright's resource type: `document`, `image`, `fetch`, ... */
+  resourceType: string;
+  status?: number;
+  /** The browser's error, e.g. `net::ERR_CONNECTION_REFUSED`. */
+  failure?: string;
+}
+
+/** Per snapshot and check: how many distinct console errors / failed requests a result keeps. */
+export const MAX_LOGGED = 20;
+
 export interface SnapshotResult {
   target: string;
   name: string;
@@ -52,6 +66,14 @@ export interface SnapshotResult {
   message?: string;
   error?: string;
   pageErrors?: string[];
+  /** Console errors while rendering (`checks.consoleErrors`), distinct, at most `MAX_LOGGED`. */
+  consoleErrors?: string[];
+  /** Distinct console errors past `MAX_LOGGED`. */
+  consoleErrorsDropped?: number;
+  /** Failed requests while rendering (`checks.httpErrors`), distinct, at most `MAX_LOGGED`. */
+  httpErrors?: HttpError[];
+  /** Distinct failed requests past `MAX_LOGGED`. */
+  httpErrorsDropped?: number;
   /** Hostnames `allowedHostnames` blocked while rendering (why an asset may be missing). */
   blocked?: string[];
   /** Full size of a screenshot that `maxHeight`/`maxWidth` cut off (CSS px). */
@@ -106,6 +128,8 @@ export function checkFindings(r: SnapshotResult): CheckName[] {
   if (r.pageErrors?.length) found.push('pageErrors');
   if (r.a11y?.length) found.push('a11y');
   if (r.overflowPx) found.push('overflow');
+  if (r.consoleErrors?.length) found.push('consoleErrors');
+  if (r.httpErrors?.length) found.push('httpErrors');
   return found;
 }
 
@@ -121,6 +145,8 @@ export function summarize(results: SnapshotResult[], failOn: FailOn[]): Pick<Rep
     pageErrors: 0,
     a11y: 0,
     overflow: 0,
+    consoleErrors: 0,
+    httpErrors: 0,
   };
   for (const r of results) {
     summary[r.status]++;

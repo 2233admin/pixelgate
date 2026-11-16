@@ -9,7 +9,8 @@ test('card', async ({ page, pixelgate }) => {
   // box (as it once did inside the card) left a 1px glyph remnant on Linux Chromium.
   await page.setContent(`<!doctype html><html lang="en"><body style="margin:0">
 <div id="card" style="margin:20px;width:160px;padding:12px;background:${color}"><button>${label}</button></div>
-<div data-pixelgate-hide style="margin:20px;font:16px monospace">${Date.now()}</div></body></html>`);
+<div data-pixelgate-hide style="margin:20px;font:16px monospace">${Date.now()}</div>
+<script>console.error('card-console')</script></body></html>`);
   const r = await pixelgate.screenshot('card', { locator: page.locator('#card') });
   expect(['unchanged', 'added', 'changed', 'updated']).toContain(r.status);
   await pixelgate.screenshot('page');

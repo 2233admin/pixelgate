@@ -60,6 +60,9 @@ describe('playwright test fixture', () => {
     assert.equal(report.summary.added, 2, r.output);
     assert.ok(existsSync(baseline('card.png')) && existsSync(baseline('card.aria.yml')), r.output);
     assert.ok(existsSync(baseline('page.png')));
+    // A console error belongs to the screenshot after it, not to the next one of the test.
+    assert.match(report.results.find((x) => x.name === 'card')!.consoleErrors?.[0] ?? '', /card-console/, JSON.stringify(report.results));
+    assert.equal(report.results.find((x) => x.name === 'page')!.consoleErrors, undefined);
   });
 
   it('unchanged UI passes; the hidden timestamp changes neither pixels nor the ARIA tree', async () => {

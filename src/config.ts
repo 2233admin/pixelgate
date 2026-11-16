@@ -10,7 +10,7 @@ import { CODECS, COMPARATORS, type Codec, type Comparator } from './compare.js';
 export type BrowserName = 'chromium' | 'firefox' | 'webkit';
 export type Status = 'unchanged' | 'changed' | 'added' | 'updated' | 'removed' | 'error';
 /** Findings that need no baseline. Counted in the summary; failing only when listed in `failOn`. */
-export type CheckName = 'pageErrors' | 'a11y' | 'overflow';
+export type CheckName = 'pageErrors' | 'a11y' | 'overflow' | 'consoleErrors' | 'httpErrors';
 /** What `failOn` can list: snapshot statuses and check findings. */
 export type FailOn = Status | CheckName;
 export type Impact = 'minor' | 'moderate' | 'serious' | 'critical';
@@ -24,21 +24,33 @@ export interface A11yOptions {
   minImpact?: Impact;
 }
 
+/** `checks.consoleErrors` / `checks.httpErrors` options. */
+export interface LogCheckOptions {
+  /** Leave out findings containing one of these strings: the console message, or the request URL. */
+  ignore?: string[];
+}
+
 /** Checks run on each snapshot after its screenshot (Happo: accessibility, detectHorizontalOverflow). */
 export interface Checks {
   /** axe-core accessibility check, scoped to `selector` when the snapshot has one. */
   a11y?: boolean | A11yOptions;
   /** Measure how far the page reaches past the right edge of the viewport. */
   overflow?: boolean;
+  /** Console messages of level error while the page rendered. */
+  consoleErrors?: boolean | LogCheckOptions;
+  /** Responses with status 400 or more, and failed requests, while the page rendered. */
+  httpErrors?: boolean | LogCheckOptions;
 }
 
 export interface ResolvedChecks {
   a11y?: Required<A11yOptions>;
   overflow: boolean;
+  consoleErrors?: Required<LogCheckOptions>;
+  httpErrors?: Required<LogCheckOptions>;
 }
 
 export const STATUSES: Status[] = ['unchanged', 'changed', 'added', 'updated', 'removed', 'error'];
-export const CHECKS: CheckName[] = ['pageErrors', 'a11y', 'overflow'];
+export const CHECKS: CheckName[] = ['pageErrors', 'a11y', 'overflow', 'consoleErrors', 'httpErrors'];
 export const IMPACTS: Impact[] = ['minor', 'moderate', 'serious', 'critical'];
 const DEFAULT_A11Y_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
 
@@ -265,7 +277,7 @@ export interface Config {
   /**
    * Statuses and check findings that make `run` exit non-zero.
    * Default `['changed', 'error']`, plus `'added'` when `update` is `none`.
-   * Add `'pageErrors'`, `'a11y'` or `'overflow'` to make those checks gate too.
+   * Add `'pageErrors'`, `'a11y'`, `'overflow'`, `'consoleErrors'` or `'httpErrors'` to make those checks gate too.
    */
   failOn?: FailOn[];
 }
@@ -365,6 +377,14 @@ export function resolveChecks(where: string, global: Checks | undefined, own: Ch
     const minImpact = o.minImpact ?? 'minor';
     if (!IMPACTS.includes(minImpact)) throw new Error(`${where}: \`checks.a11y.minImpact\` must be one of ${IMPACTS.join(', ')}`);
     out.a11y = { tags: o.tags ?? DEFAULT_A11Y_TAGS, disableRules: o.disableRules ?? [], minImpact };
+  }
+  for (const c of ['consoleErrors', 'httpErrors'] as const) {
+    if (!merged[c]) continue;
+    const ignore = (merged[c] === true ? {} : merged[c]).ignore ?? [];
+    if (!Array.isArray(ignore) || ignore.some((x) => typeof x !== 'string')) {
+      throw new Error(`${where}: \`checks.${c}.ignore\` must be a list of strings`);
+    }
+    out[c] = { ignore };
   }
   return out;
 }

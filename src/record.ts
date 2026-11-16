@@ -9,7 +9,22 @@ import type { CaptureResult } from './capture.js';
 import type { Matcher } from './compare.js';
 import type { ResolvedConfig } from './config.js';
 import { applyOutcome, determineOutcome, toResult } from './outcome.js';
-import { baselinePath, currentPath, diffPath, type SnapshotResult } from './report.js';
+import { baselinePath, currentPath, diffPath, MAX_LOGGED, type SnapshotResult } from './report.js';
+
+/** The distinct items (by `key`), at most `MAX_LOGGED`, and how many distinct ones did not fit. */
+export function distinct<T>(items: T[], key: (x: T) => string): { kept: T[]; dropped: number } {
+  const seen = new Set<string>();
+  const kept: T[] = [];
+  let dropped = 0;
+  for (const x of items) {
+    const k = key(x);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    if (kept.length < MAX_LOGGED) kept.push(x);
+    else dropped++;
+  }
+  return { kept, dropped };
+}
 
 export async function recordCapture(cfg: ResolvedConfig, c: CaptureResult, compare: Matcher['compare']): Promise<SnapshotResult> {
   const ext = `.${cfg.codec.extension}`;
@@ -29,6 +44,12 @@ export async function recordCapture(cfg: ResolvedConfig, c: CaptureResult, compa
     stableTimeoutMs: cfg.stabilize.stableTimeoutMs,
   });
   if (c.pageErrors.length) r.pageErrors = c.pageErrors;
+  const consoleErrors = distinct(c.consoleErrors ?? [], (x) => x);
+  if (consoleErrors.kept.length) r.consoleErrors = consoleErrors.kept;
+  if (consoleErrors.dropped) r.consoleErrorsDropped = consoleErrors.dropped;
+  const httpErrors = distinct(c.httpErrors ?? [], (x) => `${x.method} ${x.url} ${x.status ?? x.failure}`);
+  if (httpErrors.kept.length) r.httpErrors = httpErrors.kept;
+  if (httpErrors.dropped) r.httpErrorsDropped = httpErrors.dropped;
   if (c.blocked?.length) r.blocked = c.blocked;
   if (c.capped) r.capped = c.capped;
   if (c.unreadableStylesheets?.length) r.unreadableStylesheets = c.unreadableStylesheets;

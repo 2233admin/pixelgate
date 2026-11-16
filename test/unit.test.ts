@@ -18,10 +18,11 @@ import {
   type DecodedImage,
 } from '../src/compare.js';
 import { devices } from 'playwright';
+import { distinct } from '../src/record.js';
 import { isCI, parseViewport, resolveChecks, resolveConfig } from '../src/config.js';
 import { resolveUrl, safeName } from '../src/names.js';
 import { determineOutcome, type OutcomeInput } from '../src/outcome.js';
-import { approve, buildReport, readReport, summarize, writeReport, type Report, type SnapshotResult } from '../src/report.js';
+import { MAX_LOGGED, approve, buildReport, readReport, summarize, writeReport, type Report, type SnapshotResult } from '../src/report.js';
 import type { FullConfig, FullResult, TestCase, TestResult } from '@playwright/test/reporter';
 import PixelgatePlaywrightReporter, { REPORTER_ENV } from '../src/playwright-reporter.js';
 import { outDirOf, updateMode } from '../src/playwright-shared.js';
@@ -536,6 +537,14 @@ describe('checks config, summary and markdown', () => {
     assert.throws(() => resolveChecks('Target "x"', { a11y: { minImpact: 'huge' as 'minor' } }, undefined), /minImpact/);
   });
 
+  it('resolveChecks: consoleErrors / httpErrors take true or { ignore }; a target replaces the global value', () => {
+    const g = resolveChecks('t', { consoleErrors: true, httpErrors: { ignore: ['/analytics'] } }, undefined);
+    assert.deepEqual([g.consoleErrors, g.httpErrors], [{ ignore: [] }, { ignore: ['/analytics'] }]);
+    const t = resolveChecks('t', { httpErrors: { ignore: ['/analytics'] } }, { httpErrors: false });
+    assert.deepEqual(t, { overflow: false });
+    assert.throws(() => resolveChecks('Target "x"', { httpErrors: { ignore: '/a' as unknown as string[] } }, undefined), /checks\.httpErrors\.ignore/);
+  });
+
   it('failOn accepts statuses and checks, rejects anything else', () => {
     const base = { pages: [{ name: 'p', url: 'http://x/' }] };
     assert.deepEqual(resolveConfig({ ...base, failOn: ['changed', 'a11y'] }, '/tmp').failOn, ['changed', 'a11y']);
@@ -551,6 +560,33 @@ describe('checks config, summary and markdown', () => {
     assert.deepEqual([s.summary.a11y, s.summary.overflow, s.summary.pageErrors], [1, 1, 1]);
     assert.equal(s.failed, false);
     assert.equal(summarize(rs, ['overflow']).failed, true);
+  });
+
+  it('summary, CLI-facing counts and markdown cover consoleErrors and httpErrors', () => {
+    const rs = [
+      {
+        target: 't',
+        name: 'a',
+        status: 'unchanged' as const,
+        consoleErrors: ['boom (http://x/)'],
+        httpErrors: [{ url: 'http://x/api', method: 'POST', resourceType: 'fetch', status: 503 }],
+        httpErrorsDropped: 2,
+      },
+    ];
+    const s = summarize(rs, ['changed']);
+    assert.deepEqual([s.summary.consoleErrors, s.summary.httpErrors, s.failed], [1, 1, false]);
+    assert.equal(summarize(rs, ['consoleErrors']).failed, true);
+    const md = renderMarkdown(buildReport(rs, ['changed', 'httpErrors']));
+    assert.match(md, /Checks: 1 with console errors, 1 with failed requests\./);
+    assert.match(md, /\| httpErrors \| `a` \| `t` \| 503 POST http:\/\/x\/api \(\+2 more\) \|/);
+    assert.match(md, /\| consoleErrors \| `a` \| `t` \| boom \(http:\/\/x\/\) \|/);
+  });
+
+  it('distinct: drops repeats, keeps MAX_LOGGED, counts the rest', () => {
+    const many = Array.from({ length: 30 }, (_, i) => `e${i % 25}`);
+    const { kept, dropped } = distinct(many, (x) => x);
+    assert.equal(kept.length, MAX_LOGGED);
+    assert.equal(dropped, 25 - MAX_LOGGED);
   });
 
   it('markdown: checks section says which checks gate and which only report', () => {
