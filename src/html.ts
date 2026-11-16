@@ -56,7 +56,9 @@ const report = JSON.parse(document.getElementById('data').textContent);
 const STATUSES = ['changed', 'error', 'removed', 'added', 'updated', 'unchanged'];
 const s = report.summary;
 const findings = (r) => [r.pageErrors?.length && 'pageErrors', r.a11y?.length && 'a11y', r.overflowPx && 'overflow'].filter(Boolean);
-const withChecks = report.results.filter((r) => findings(r).length).length;
+// Capture notes: compared only up to the size cap, or pseudo-classes not forced everywhere.
+const noted = (r) => findings(r).length > 0 || !!r.capped || !!r.unreadableStylesheets?.length;
+const withChecks = report.results.filter(noted).length;
 let filter = s.changed + s.error + s.removed > 0 ? 'attention' : withChecks > 0 ? 'checks' : 'all';
 let view = 'side';
 const src = (p) => '../' + p;
@@ -140,12 +142,12 @@ function card(r) {
   return c;
 }
 function render() {
-  buttons('filters', [['attention', 'Needs review (' + (s.changed + s.error + s.removed) + ')'], ['checks', 'Checks (' + withChecks + ')'],
+  buttons('filters', [['attention', 'Needs review (' + (s.changed + s.error + s.removed) + ')'], ['checks', 'Checks and notes (' + withChecks + ')'],
     ['all', 'All (' + s.total + ')'], ...STATUSES.map((k) => [k, k + ' (' + s[k] + ')'])], () => filter, (v) => (filter = v));
   buttons('views', [['side', 'Side by side'], ['diff', 'Diff only'], ['slider', 'Slider']], () => view, (v) => (view = v));
   const rows = report.results.filter((r) =>
     filter === 'all' ? true : filter === 'attention' ? ['changed', 'error', 'removed'].includes(r.status)
-      : filter === 'checks' ? findings(r).length > 0 : r.status === filter);
+      : filter === 'checks' ? noted(r) : r.status === filter);
   const list = document.getElementById('list');
   list.replaceChildren(...(rows.length ? rows.map(card) : [el('p', { class: 'empty', text: 'Nothing here.' })]));
 }

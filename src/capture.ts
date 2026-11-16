@@ -317,10 +317,16 @@ export function elementBox(el: Element, grow: boolean): Box {
       if (!(l || t || r || b)) return;
       const box = e.getBoundingClientRect();
       if (!box.width && !box.height) return;
-      left = Math.min(left, box.left - l);
-      top = Math.min(top, box.top - t);
-      right = Math.max(right, box.right + r);
-      bottom = Math.max(bottom, box.bottom + b);
+      // Outlines and shadows are in the element's own (untransformed) pixels; the box includes
+      // transforms of the element and its ancestors. Scale the extents the same way (a rotation
+      // overestimates them, which keeps the decoration in the crop).
+      const own = e as HTMLElement;
+      const sx = own.offsetWidth ? box.width / own.offsetWidth : 1;
+      const sy = own.offsetHeight ? box.height / own.offsetHeight : 1;
+      left = Math.min(left, box.left - l * sx);
+      top = Math.min(top, box.top - t * sy);
+      right = Math.max(right, box.right + r * sx);
+      bottom = Math.max(bottom, box.bottom + b * sy);
     };
     add(el);
     for (const d of Array.from(el.querySelectorAll('*'))) add(d);
@@ -387,7 +393,8 @@ function shooter(page: Page, snap: PageSnap, cfg: ResolvedConfig, target: Resolv
     if (snap.selector) {
       const el = page.locator(snap.selector).first();
       if (!grow && !capping) return el.screenshot(opts);
-      const { clip, capped } = capBox(await el.evaluate(elementBox, grow), maxWidth, maxHeight);
+      // Waits for the element like the screenshot call does, within the snapshot timeout.
+      const { clip, capped } = capBox(await el.evaluate(elementBox, grow, { timeout: cfg.timeoutMs }), maxWidth, maxHeight);
       s.capped = capped;
       return grow || capped ? clipped(clip) : el.screenshot(opts);
     }

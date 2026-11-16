@@ -529,12 +529,15 @@ describe('in-page helpers (chromium)', () => {
   box-shadow: inset 0 0 40px red, 2px 0 0 1px rgb(0, 0, 0), -3px 0 5px rgba(0, 0, 0, 0.5)">
   <span style="position:absolute;left:0;top:0;width:10px;height:10px;outline:4px solid lime;outline-offset:3px"></span>
 </div>
-<div id="edge" style="position:absolute;left:2px;top:2px;width:20px;height:20px;box-shadow:0 0 0 10px #000"></div></body>`);
+<div id="edge" style="position:absolute;left:2px;top:2px;width:20px;height:20px;box-shadow:0 0 0 10px #000"></div>
+<div id="scaled" style="position:absolute;left:200px;top:200px;width:20px;height:20px;transform:scale(2);outline:4px solid lime"></div></body>`);
       const grown = await page.locator('#a').evaluate(elementBox, true);
       // Outline of the child reaches 7px above and left of the card; the shadows reach 8px left, 3px right, 5px down.
       assert.deepEqual(grown, { x: 42, y: 43, width: 111, height: 62 });
       assert.deepEqual(await page.locator('#a').evaluate(elementBox, false), { x: 50, y: 50, width: 100, height: 50 });
       assert.deepEqual(await page.locator('#edge').evaluate(elementBox, true), { x: 0, y: 0, width: 32, height: 32 });
+      // scale(2) around the centre: border box 190..230, the 4px outline drawn 8px wide.
+      assert.deepEqual(await page.locator('#scaled').evaluate(elementBox, true), { x: 182, y: 182, width: 56, height: 56 });
     } finally {
       await browser.close();
     }

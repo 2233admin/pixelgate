@@ -697,8 +697,17 @@ describe('size caps', () => {
     assert.throws(() => resolveConfig({ pages: [{ name: 'p', url: 'http://x/', maxHeight: -5 }] }, '/tmp'), /Page "p".*maxHeight/);
   });
 
-  it('markdown says when a listed screenshot was cut at the cap', () => {
-    const report = buildReport([{ target: 't', name: 'long', status: 'added', capped: { width: 400, height: 8000 } }], ['changed']);
-    assert.match(renderMarkdown(report), /no baseline yet; cut at the size cap \(full 400x8000px\)/);
+  it('markdown notes a cut or pseudo-class problem on any snapshot, unchanged ones too', () => {
+    const report = buildReport(
+      [
+        { target: 't', name: 'long', status: 'unchanged', capped: { width: 400, height: 8000 } },
+        { target: 't', name: 'menu', status: 'unchanged', unreadableStylesheets: ['https://cdn.example/a.css'] },
+      ],
+      ['changed'],
+    );
+    const md = renderMarkdown(report);
+    assert.match(md, /#### Notes/);
+    assert.match(md, /\| cut at the size cap \| `long` \| `t` \| full 400x8000px, compared up to the cap \|/);
+    assert.match(md, /\| pseudo-classes not forced \| `menu` \| `t` \| unreadable: `https:\/\/cdn\.example\/a\.css` \|/);
   });
 });

@@ -364,12 +364,14 @@ export default defineConfig({
 - **`maxHeight` / `maxWidth`** (Happo's, default 5000px tall, no width cap):
   a longer page or element is cut off at the cap, and the result says how big
   it was (`capped`, shown in the report, the comment and the CLI). Screenshots
-  under the cap are taken exactly as before.
+  under the cap are taken exactly as before. A viewport screenshot
+  (`fullPage: false`) is never cut.
 - **`includeOutlinesAndShadows`**: a `selector` crop normally stops at the
   element's border box and cuts off its focus ring or shadow. With this on it
   grows to cover the outlines and outer box-shadows of the element and its
-  descendants (e.g. a button inside `#storybook-root`). Global, per Storybook
-  source, per page. `filter: drop-shadow` is not measured.
+  descendants (e.g. a button inside `#storybook-root`), scaled with their CSS
+  transforms. Global, per Storybook source, per page. `filter: drop-shadow` is
+  not measured.
 - **`applyPseudoClasses`**: mark elements to show a state without moving the
   mouse, several at once:
 

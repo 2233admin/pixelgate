@@ -39,11 +39,6 @@ function percent(ratio: number): string {
 }
 
 function detail(r: SnapshotResult): string {
-  const base = statusDetail(r);
-  return r.capped ? `${base}${base ? '; ' : ''}cut at the size cap (full ${r.capped.width}x${r.capped.height}px)` : base;
-}
-
-function statusDetail(r: SnapshotResult): string {
   switch (r.status) {
     case 'changed': {
       const parts: string[] = [];
@@ -160,6 +155,25 @@ function ariaDiffs(listed: SnapshotResult[], open: boolean, maxImages: number): 
   return lines;
 }
 
+/**
+ * Capture notes on any snapshot, unchanged ones too: what a passing comparison did not cover
+ * (cut at the size cap) or could not set up (pseudo-classes in unreadable stylesheets).
+ */
+function notesTable(report: Report, maxRows: number): string[] {
+  const rows: string[] = [];
+  for (const r of report.results) {
+    if (r.capped) {
+      rows.push(`| cut at the size cap | ${code(r.name)} | ${code(r.target)} | full ${r.capped.width}x${r.capped.height}px, compared up to the cap |`);
+    }
+    if (r.unreadableStylesheets?.length) {
+      rows.push(`| pseudo-classes not forced | ${code(r.name)} | ${code(r.target)} | unreadable: ${r.unreadableStylesheets.map(code).join(', ')} |`);
+    }
+  }
+  if (!rows.length) return [];
+  const more = rows.length > maxRows ? ['', `…and ${rows.length - maxRows} more in the full report.`] : [];
+  return ['', '#### Notes', '', '| Note | Snapshot | Target | Detail |', '| --- | --- | --- | --- |', ...rows.slice(0, maxRows), ...more];
+}
+
 function table(listed: SnapshotResult[], maxRows: number): string[] {
   if (!listed.length) return [];
   const rows = listed
@@ -220,6 +234,7 @@ export function renderMarkdown(report: Report, opts: MarkdownOptions = {}): stri
       ...headline(report, opts.id),
       ...table(listed, maxRows),
       ...checksTable(report, maxRows),
+      ...notesTable(report, maxRows),
       ...ariaDiffs(listed, report.failed, maxImages),
       ...screenshots(listed, opts.imageBaseUrl, report.failed, maxImages),
       ...footer(report, opts),

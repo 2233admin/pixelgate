@@ -218,9 +218,10 @@ export interface Config {
    */
   ariaSnapshot?: boolean;
   /**
-   * Tallest screenshot, in CSS pixels: a longer page (or element) is cut off at this height
-   * and the result says how tall it was (`capped`). Default 5000, like Happo. `0` = no cap.
-   * Targets and pages can override.
+   * Tallest full-page or element screenshot, in CSS pixels: a longer one is cut off at this
+   * height and the result says how tall it was (`capped`). A viewport screenshot
+   * (`fullPage: false`) is the viewport and is never cut. Default 5000, like Happo. `0` = no
+   * cap. Targets and pages can override.
    */
   maxHeight?: number;
   /** Widest screenshot, in CSS pixels, like `maxHeight`. Default `0` (no cap). */
