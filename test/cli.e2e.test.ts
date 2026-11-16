@@ -61,6 +61,13 @@ console.log(c.pages.map((p) => p.name).join());`;
     const js = await load('commonjs', { 'pixelgate.config.js': `export default ${page('js')};\n` });
     assert.equal(js.status, 0, js.stderr);
     assert.equal(js.stdout, 'js');
+
+    // Declaring a CommonJS wrapper name is what V8 trips on first here.
+    const dirname = await load('commonjs', {
+      'pixelgate.config.js': `const __dirname = import.meta.dirname;\nexport default { pages: [{ name: typeof __dirname, url: 'about:blank' }] };\n`,
+    });
+    assert.equal(dirname.status, 0, dirname.stderr);
+    assert.equal(dirname.stdout, 'string');
   });
 
   it('a CommonJS config and a package without "type" load as before', async () => {
@@ -71,6 +78,21 @@ console.log(c.pages.map((p) => p.name).join());`;
     const untyped = await load(undefined, { 'pixelgate.config.ts': `const n: string = 'untyped';\nexport default { pages: [{ name: n, url: 'about:blank' }] };\n` });
     assert.equal(untyped.status, 0, untyped.stderr);
     assert.equal(untyped.stdout, 'untyped');
+  });
+
+  it('CommonJS files stay CommonJS: type-only imports, module syntax in comments and strings', async () => {
+    const ts = await load('commonjs', {
+      'pixelgate.config.ts': `import type { Config } from 'pixelgate';\nconst config: Config = ${page('typed')};\nmodule.exports = config;\n`,
+    });
+    assert.equal(ts.status, 0, ts.stderr);
+    assert.equal(ts.stdout, 'typed');
+
+    const js = await load('commonjs', {
+      'pixelgate.config.js': `/*\nexport default is the ES module form of module.exports\n*/\nconst note = \`\nimport x from 'y'\n\`;\nmodule.exports = ${page('commented')};\n`,
+    });
+    assert.equal(js.status, 0, js.stderr);
+    assert.equal(js.stdout, 'commented');
+    assert.doesNotMatch(ts.stderr + js.stderr, /ExperimentalWarning/);
   });
 
   it('project files the config imports load as ES modules too; a CommonJS one stays CommonJS', async () => {

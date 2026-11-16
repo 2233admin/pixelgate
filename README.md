@@ -30,10 +30,12 @@ pnpm exec playwright install chromium   # plus firefox / webkit if you target th
 so `playwright install` always fetches the browser build that version expects.
 `vite` and `vitest` are optional peers, used only by the adapters below.
 
-Node 22.18 or newer (so `pixelgate.config.ts` loads without a build step).
-The config is an ES module even in a `"type": "commonjs"` package (what
-`npm init -y` writes): pixelgate loads a `.ts` / `.js` config with `import` /
-`export` statements, and the project files it imports, as ES modules.
+Node 22.18+ or 23.6+ (so `pixelgate.config.ts` loads without a build step).
+The config can be an ES module even in a `"type": "commonjs"` package (what
+`npm init -y` writes): pixelgate loads a `.ts` / `.js` config with ES module
+syntax, and the project files it imports, as ES modules. Files imported later,
+from inside a callback such as `beforeCapture`, keep Node's rules: import them
+at the top of the config, or name them `.mts` / `.mjs`.
 
 ## Configure
 
