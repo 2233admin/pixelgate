@@ -1,0 +1,63 @@
+name: engine
+
+# Builds the exploration engine (engine/bombadil, vendored Bombadil) for each platform
+# pixelgate supports. Binaries are uploaded as artifacts; publishing them is a later step.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'engine/**'
+      - '.github/workflows/engine.yml'
+  pull_request:
+    paths:
+      - 'engine/**'
+      - '.github/workflows/engine.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, exe: .exe }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, exe: '' }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, exe: '' }
+          - { os: macos-latest, target: aarch64-apple-darwin, exe: '' }
+    defaults:
+      run:
+        shell: bash
+        working-directory: engine/bombadil
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine/bombadil
+
+      # The terminal driver (PTY + libghostty-vt) is left out: pixelgate drives browsers only.
+      - run: cargo build --release -p bombadil-cli --no-default-features --locked
+
+      - name: Smoke
+        run: |
+          set -euo pipefail
+          ./target/release/bombadil${{ matrix.exe }} --version
+          ./target/release/bombadil${{ matrix.exe }} browser test-external --help > /dev/null
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: engine-${{ matrix.target }}
+          path: engine/bombadil/target/release/bombadil${{ matrix.exe }}
+          if-no-files-found: error
+          retention-days: 14

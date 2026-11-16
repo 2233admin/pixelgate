@@ -1,0 +1,469 @@
+# The Bombadil Changelog
+
+## 0.7.10
+
+Major updates:
+
+* Add `shrink` command for browser and terminal drivers (#372)
+* Add generator filtering, mapping, and enabling (#390)
+* Unhide `fuzz` command and mark experimental (#403)
+* Write trace and screenshots when running in Antithesis (#402)
+
+Minor updates:
+
+* Add a "Workflows" chapter to the manual (#404)
+* Downgrade error logs for acceptable browser driver errors (#389)
+
+Bug fixes:
+
+* Fix incorrect reference to `canvasCenter` in manual (#397)
+* Capture last state at program termination in fuzzer (#386, #388)
+
+Internal:
+
+* Accept inner strategy for runs in fuzzer (#373)
+
+## 0.7.9
+
+Major updates:
+
+* browser: deprecate delayMillis for TypeText action (#385)
+* runner: add global timeout for stall detection (#370)
+* fuzzer: accept --parallelism option (#371)
+* browser: add --allow-url exploration boundary (#353)
+
+Minor updates:
+
+* docs: add LLM usage notes in issue and PR templates (#378)
+* browser: quote URLs in reproduction commands (#275)
+* inspect: show loading message and tolerate in spec (#364)
+* docs: generate CLI reference in manual (#357)
+
+Bug fixes:
+
+* browser: tolerate state capture failure and resume on unexpected pauses (#383)
+* browser: wait for commit on cross-document history navigations (#381)
+* browser: only act on main-frame load events while navigating or loading (#380)
+* browser: missing match arms in action accepts function (#379)
+* browser: send quiesced event also on quiescence errors (#377)
+* browser: preserve directive prologues during js instrumentation (#375)
+* browser: negative coverage index (#367)
+* browser: match button replay fingerprints (#356)
+* browser: generate valid numbers for input type=number (#351)
+
+Internal:
+
+* ci: run tests on macos too (#366)
+* browser: Integrations tests for SSE and WS (#336)
+* test: fix flaky terminal test (#363)
+* docs: add terminal examples  (#352, #337)
+
+## 0.7.8
+
+Major updates:
+
+* Faster and more robust quiescence detection in browser driver (#338)
+* Add option to virtualize time in Chrome (#340)
+
+Minor updates:
+
+* Update libghostty-vt to 0.2.2 (#343)
+* Bind on all interfaces in `inspect` command's server (#334)
+* Add generative AI policy and refresh contributor docs (#347)
+
+Bug fixes:
+
+* Fix internal module error, and fail build on tsc errors (#345)
+* Only hold lock while getting trace writer in `fuzz` command (#333)
+
+Internal:
+
+* Exit on unexpected Bombadil exit codes in CI (#342)
+
+## 0.7.7
+
+Minor updates:
+
+* Add experimental (and hidden) `fuzz` commands (#317, #326)
+
+Bug fixes:
+
+* Fix docker compatibility issues (#328)
+* Fix duplication of always residuals in LTL eval (#325)
+
+Internal:
+
+* Isolate cargo flags in trunk build (#330)
+* Add CI smoke test for docker container (#329)
+
+## 0.7.6
+
+Bug fixes:
+
+* Fix replay rejecting generated text (#320)
+* Don't initialize coverage module when instrumentation disabled (#321)
+
+Internal:
+
+* Replace example-based tests with Hegel property (#323)
+* Added a hiring note (#318)
+* Bump hegel version (#316)
+* Rename willow-tree to stdx, as an internal extras library (#315)
+* Split driver and session, generalize strategy (#314)
+
+## 0.7.5
+
+Bug fixes:
+
+* Custom action varags invocation (#312)
+
+Internal:
+
+* Lift `run` to top-level, no struct around (#311)
+
+## 0.7.4
+
+Minor updates:
+
+* Update libghostty-rs to 0.2.1 (#303)
+
+Bug fixes:
+
+* Handle SIGINT and stop test gracefully (#308, #309)
+* Add test and fix for action races (#307)
+* Ignore false continuations in Eventually eval (#306)
+
+## 0.7.3
+
+Major updates:
+
+* Browser testing is now up to 6x faster, capturing and testing up to 60 states
+  per second, made possible by forking and heavily rewriting our CDP client,
+  along with various improvements to the browser driver
+  (#292, #298, #300)
+* Support custom actions in browser driver (#276)
+
+Minor updates:
+
+* Add CI test using test-external (#301)
+* Trim down tokio feature set (#297)
+* Unpin & update boa (#299)
+* Make hotpath an opt-in command in Nix shell (#283)
+* Bump flake inputs (#280)
+* Translate remaning LTL equivalence properties to Hegel (#281)
+
+Bug fixes:
+
+* Deprecate defunct delayMillis for DoubleClick action (#296)
+* Handle additional frame navigation/load events (#294)
+
+## 0.7.2
+
+Bug fixes:
+
+* Only include driver-specific generated reference (#271)
+
+## 0.7.1
+
+Major updates:
+
+* Generate TypeScript reference in manual (#266)
+* Mark state boundaries for Antithesis fuzzer (#269)
+* Add resource leak property in extras (#267)
+
+Minor updates:
+
+* Add specific error messages/context for failed trace writes (#268)
+
+## 0.7.0
+
+Major updates:
+
+* Publish docker image to docker hub on release (#262)
+* Improve integration with Antithesis environment and fuzzer (#257)
+* Add --cookie option for browser testing (#232, #256)
+
+Minor updates:
+
+* Add `curl` to docker image (#258)
+* Add configurable quiescence for terminal drain (#240)
+
+Bug fixes:
+
+* Drop dangling ./random export from npm package (#259)
+* Pass generation through with action to discard stale ones (#260)
+* Fix stack overflow/growing violations (#247)
+* Fix npm package build in CI (#237)
+* Fix README broken links (#229)
+* Fix terminal --reproduce bug (#226)
+
+Breaking changes:
+
+* Introduce action templates system and remove randomness from JS runtime (#233, #234, #235)
+
+Internal:
+
+* Use flat-vec tree for markup (#248)
+* Stop manually passing target/rustflags in Nix (#245)
+* Separate example specs and improve caching (#239)
+* Add nix-build-push helper for prewarming cachix (#238)
+* Port property tests to Hegel (#227)
+* Split up schema modules (#225)
+
+Migration notes:
+
+* Action generators no longer directly use randomness in JS/TS to produce
+  concrete `Action` values --- instead they declaratively describe the ranges of
+  random values in actions, producing `ActionTemplate` values.
+
+  Templates are generally parameterized with `[number, number]` or
+  `StringGenerator` (see types
+  [here](https://github.com/antithesishq/bombadil/blob/v0.7.0/lib/bombadil/src/specification/actions.ts)),
+  e.g.:
+
+  ```typescript
+  { Click: { point: { x: [0, 100], y: [200, 300] }, ... } }
+  ```
+
+  You may still use constants if you don't want Bombadil to generate
+  random values, e.g.:
+
+  ```typescript
+  { Click: { point: { x: 100, y: 200 }, ... } }
+  ```
+
+*  Some browser actions need a `Fingerprint` now, e.g. `Click` needs one if you
+   write a custom generator that produces clicks. Fingerprints are structures
+   that identify elements, starting at strong identifiers like `id` or
+   `data-testid` attributes, to weaker ones like element types and text
+   contents. To get the fingerprint of an element, use `getFingerprint` that is
+   exported by `@antithesishq/bombadil/browser`.
+
+## 0.6.1
+
+Major updates:
+
+* Adapt the README and manual for multiple drivers (#215, #216)
+* Refuse to silently append to an existing trace in `--output-path` (#204)
+
+Bug fixes:
+
+* Fix timeline tick label scaling (#171) (#196)
+* Fix llms text generation in release workflow (#220)
+
+## 0.6.0
+
+Major updates:
+
+* Terminal testing with the full specification language (#190, #210, #206)
+* Add default properties and actions for terminal (#205)
+* Add timeout for terminal programs that output forever (#201)
+* Support custom elements with slots (#200)
+* Browser: added MouseDrag & SetViewPort actions (#188)
+* Browser: only emit text for text-producing keys (#199)
+
+Minor updates:
+
+* Add `#[cfg(terminal)]` feature flag for being able to build without terminal testing support (#203)
+* Use Antithesis SDK for RNG, enabling the Antithesis fuzzer to explore the state space more effectively (#202)
+* Log chosen action, not last action (#186)
+
+Bug fixes:
+
+* Use CWD for PTY spawn (#207)
+* Fix `Always` wrapper stack overflow in nested temporal formula (#209)
+* Add missing terminal CLI args in documentation (#185)
+
+Breaking changes:
+
+* The old browser testing command `bombadil test` is now under `bombadil browser test`
+* Browser-specific modules in the specification language are now under `@antithesishq/browser`
+
+Internal:
+
+* Decouple browser and make terminal driver first-class (#183)
+* Update libghostty-vt (#184)
+* Improve build times in CI with hybrid nix caching approach (#182)
+
+## 0.5.0
+
+Major updates:
+
+* Skip disabled controls in default clicks generator (#175)
+* Add new experimental terminal fuzzer (#162, #164, #179, #180)
+* Add test case reproduction as an option to `test` and `test-external` (#177)
+* Improve test performance greatly by using quiescence timers instead of fixed timeouts (#176)
+* Auto-accept dialogs (#166)
+* Add `--header` option to pass extra request headers (#165)
+
+Breaking changes:
+
+* Remove `.at()` and `time` cell (#167)
+
+Bug fixes:
+
+* Begin browser state machine in navigating (#178)
+* Use mask for edge coverage hashing (#170)
+* Shutdown the browser before awaiting state machine done (#157)
+
+Internals:
+
+* Extract bombadil-ltl crate (#172)
+* Remove esbuild (#169)
+* Centralize all versions into root Cargo.toml (#168)
+* Add spec and CI testing for Inspect UI (#158)
+* Bump oxc deps (#156)
+
+## 0.4.5
+
+Major updates:
+
+* Release npm package with executables (#154)
+* Add wait-once generator to defaults (#151)
+* Make CLI exit codes consistent (#150)
+* Widen default granted permissions for Chromium 145 (#149)
+
+Bug fixes:
+
+* Explicitly close + drop chrome on terminate() (#148)
+
+Internals:
+
+* Bump dependencies (#153)
+
+## 0.4.4
+
+* Automate release procedure with script (#145)
+* Grant permissions (e.g. local network access) to Chrome from CLI (#143, #144)
+
+## 0.4.3
+
+Major updates:
+
+* Support file downloads and file inputs (#139)
+* Pretty-printed output rather than plain logs (#133, #138)
+* Autoscroll actions list in Bombadil Inspect (#131, #132)
+* Improve violation error messages (#127)
+* Add --timeout option (#86)
+
+Bug fixes:
+
+* Unwrap nested always violations recursively (#134)
+* Fix stack overflow on `BundlerError` (#125)
+
+Internals:
+
+* Bump chromiumoxide (#140)
+
+## 0.4.2
+
+* Enable `trunk build` in release (fixes broken `inspect` command)
+
+## 0.4.1
+
+* Expose `inspect` command in release build (#119)
+* Use `use_memo` for improved scrubbing performance in Bombadil Inspect (#117)
+
+
+## 0.4.0
+
+Major updates:
+
+* Add the *Bombadil Inspect* web UI  (#81, #94, #102, #109, #114, #112)
+* Install pinned version from boa `main` branch to avoid panic (#113)
+* Reduce likelihood of navigation actions in defaults (#111)
+* Documentation edits and improvements (#87, #88, #92, #95, #96, #101, #106, #110)
+* Improve violations rendering (#104, #108)
+* Include snapshots in trace (#77)
+* Add DoubleClick action (#74)
+
+Bug fixes:
+
+* Fix cached violation bug on continued stepping (#85)
+* Fix hanging pause handling (#79)
+* Instrument module scripts and forward headers (#75)
+
+Internals:
+
+* Remove runner channel (#78)
+* clean up from nix wrapper commands (#80)
+* Move AGENTS.md (#83)
+* Increase integration test parallelism (#76)
+
+Breaking changes:
+
+* Individual default action generators are no longer exported from `@antithesishq/bombadil/defaults`
+* Trace file format changes
+
+## 0.3.2
+
+Major updates:
+
+* Bundle specification for execution in browser (#61)
+* Support importing non-code files (#63)
+* Name extractors automatically for better debugging experience (#62)
+* Add `Wait` action (effectively a no-op) (#65)
+* Support more key codes in `PressKey` action
+* Add llms.txt to GitHub Pages release artifacts (#60)
+* Make JS instrumentation configurable with CLI option (#59)
+
+Bug fixes and small improvements:
+
+* Pretty-print console log args in log output (#64)
+* Improve error message on dependent extractor use 
+* Fix link to contribution guide in the getting started page (#58)
+
+## 0.3.1
+
+Bug fixes and small improvements:
+
+* Fix broken links to executables in release (#56)
+* Link to manual from README (#54)
+
+## 0.3.0
+
+Major updates:
+
+* Add action generators to specification language (#36)
+* Publish The Bombadil Manual (#47)
+* Arm64 linux builds
+* Sign mac executable (#33)
+
+Breaking changes:
+
+* Convert all TypeScript to use camelCase (#45)
+
+Bug fixes:
+
+* Ignore stale action (#52)
+* Use sequence expressions for instrumentation hooks (#50)
+* Fix action serialization issue (#46)
+* Collect a first state when running in existing target (#41)
+* Handle exceptions pausing (#40)
+* Fix state capture hanging on screenshot (#38)
+* Don't parse non-HTML using html5ever in instrumentation (#37)
+* Abort tokio task running action on timeout (#35)
+
+
+
+## 0.2.1
+
+* Add help messages to commands and options (#30)
+* Fix errors in release procedure docs (#29)
+* Rewrite macOS executable to avoid linking against Nix paths (#27)
+* Update install instructions after v0.2.0 release (#25)
+* Optimize builds for Bombadil version bumps, speeding up the release process (#24)
+
+
+## 0.2.0
+
+* Introduced a new specification language built on TypeScript/JavaScript, with
+  linear temporal logic formulas and a standard library of reusable default
+  properties. (#11, #14, #18, #20)
+* Fix race condition + move timeouts into browser state machine (#22)
+* New rust build setup, static linking, release flow (#21)
+* Auto-formatting and clippy green (#16)
+
+## 0.1.x
+
+Beginnings are such delicate times.

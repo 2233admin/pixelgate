@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { CHECKS, findConfigFile, loadConfig } from './config.js';
+import { explore } from './explore.js';
 import { renderMarkdown } from './markdown.js';
 import { approve, readReport, reportDir, type OutDir } from './report.js';
 import { run } from './run.js';
@@ -15,6 +16,9 @@ Usage:
   pixelgate approve  [--config <file> | --out-dir <dir>] [--from <dir>] [--only <glob>]... [--prune]
   pixelgate summary  [--config <file> | --out-dir <dir>] [--id <id>] [--report-url <url>]
                      [--run-url <url>] [--image-base <url>] [--accept-command <cmd>]
+  pixelgate explore  <url> [spec] [--engine <path>] [--time-limit <dur>] [--keep-going] [--headed]
+                     [--width <px>] [--height <px>] [--device-scale-factor <n>] [--allow-url <pattern>]...
+                     [--config <file>] [--out-dir <dir>]
 
 run      Capture every snapshot, diff against baseline, write <outDir>/report/.
          Exit 0 = pass, 1 = statuses in \`failOn\` present, 2 = usage/config error.
@@ -32,6 +36,11 @@ approve  Promote current screenshots (and .aria.yml ARIA snapshots) of
 summary  Print the last report as Markdown for a pull-request comment or CI job
          summary. --image-base is the URL the report's image paths resolve
          against (no images without it).
+
+explore  Property-based exploration of <url> with the vendored Bombadil engine (--engine or
+         PIXELGATE_ENGINE): random clicks and typing, checked against LTL properties. Writes
+         <outDir>/explore/. Exit 0 = no violations, 1 = violations, 2 = engine/usage error.
+         Chromium only; it clicks everything, so point it at local or throwaway environments.
 
 --json   Print the report JSON to stdout (progress goes to stderr).`;
 
@@ -53,6 +62,16 @@ async function main(argv: string[]): Promise<number> {
       'run-url': { type: 'string' },
       'image-base': { type: 'string' },
       'accept-command': { type: 'string' },
+      engine: { type: 'string' },
+      'time-limit': { type: 'string' },
+      'keep-going': { type: 'boolean' },
+      headed: { type: 'boolean' },
+      width: { type: 'string' },
+      height: { type: 'string' },
+      'device-scale-factor': { type: 'string' },
+      'allow-url': { type: 'string', multiple: true },
+      // Declared only to refuse it with a reason (mobile emulation is not offered for explore).
+      device: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
       version: { type: 'boolean', short: 'v' },
     },
@@ -134,6 +153,41 @@ async function main(argv: string[]): Promise<number> {
       }),
     );
     return 0;
+  }
+  if (cmd === 'explore') {
+    if (values.device) throw new Error('explore: --device (mobile emulation) is not supported; use --width/--height/--device-scale-factor');
+    const [, url, spec, ...extra] = positionals;
+    if (!url || extra.length) throw new Error('usage: pixelgate explore <url> [spec] [options]');
+    const num = (name: string, v: string | undefined): number | undefined => {
+      if (v === undefined) return undefined;
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) throw new Error(`--${name} must be a positive number`);
+      return n;
+    };
+    const r = await explore({
+      url,
+      spec,
+      engine: values.engine,
+      timeLimit: values['time-limit'],
+      keepGoing: values['keep-going'],
+      headed: values.headed,
+      width: num('width', values.width),
+      height: num('height', values.height),
+      deviceScaleFactor: num('device-scale-factor', values['device-scale-factor']),
+      allowUrl: values['allow-url'],
+      config: values.config,
+      outDir: values['out-dir'],
+      cwd,
+    });
+    const rep = r.report;
+    log(
+      `
+${['PASS', 'FAIL', 'ERROR'][r.exitCode]}  states ${rep.states.length}  violations ${rep.violations.length}` +
+        (rep.violations.length ? `  (${[...new Set(rep.violations.map((v) => v.name))].join(', ')})` : '') +
+        `
+report: ${path.join(r.dir, 'explore.html')}`,
+    );
+    return r.exitCode;
   }
   log(`Unknown command "${cmd}"\n\n${HELP}`);
   return 2;

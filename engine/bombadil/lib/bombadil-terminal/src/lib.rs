@@ -1,0 +1,284 @@
+use std::collections::VecDeque;
+use std::io::Write;
+use std::time::SystemTime;
+
+use anyhow::{Result, anyhow, bail};
+use bombadil::driver::RunState;
+use bombadil::model::{Picked, accepting_key};
+use bombadil::render::Formatted;
+use bombadil::runner::{ControlFlow, PropertiesState, RunStrategy};
+use bombadil::specification::convert::ToSchema;
+use bombadil::specification::domain::Snapshot;
+use bombadil::styled;
+use bombadil::tree::Leaves;
+use bombadil_schema::terminal::{
+    ProcessExitStatus, TerminalAttributes, TerminalCell, TerminalColor,
+    TerminalStyle, TerminalUnderline,
+};
+use owo_colors::{OwoColorize, XtermColors};
+use rand::{RngExt, TryRng};
+
+use crate::driver::{TerminalAction, TerminalActionTemplate, TerminalSession};
+use crate::state::TerminalState;
+
+pub mod driver;
+pub mod extractors;
+pub mod js;
+pub mod pty;
+pub mod state;
+pub mod trace;
+
+pub enum TerminalTestMode {
+    RandomWalk,
+    Reproduce(VecDeque<TerminalAction>),
+}
+
+pub struct TerminalStrategy<Rng: TryRng> {
+    pub rng: Rng,
+    pub mode: TerminalTestMode,
+    pub test_start: Option<bombadil_schema::Time>,
+    pub violations_count: u64,
+    pub exit_on_violation: bool,
+    pub deadline: Option<SystemTime>,
+    pub states_seen: usize,
+    pub quiet: bool,
+}
+
+impl<Rng: TryRng + RngExt> TerminalStrategy<Rng> {
+    #[hotpath::measure]
+    fn pick_action(
+        &mut self,
+        leaves: &Leaves<'_, TerminalActionTemplate>,
+    ) -> Result<Picked<TerminalAction>> {
+        if leaves.as_slice().is_empty() {
+            bail!("no actions available");
+        }
+        match &mut self.mode {
+            TerminalTestMode::RandomWalk => {
+                Ok(Picked::generate(leaves.pick(&mut self.rng)?, &mut self.rng))
+            }
+            TerminalTestMode::Reproduce(actions) => {
+                let original = actions.pop_front().ok_or_else(|| {
+                    anyhow!("no remaining actions in reproduce queue")
+                })?;
+                if let Some(template) = accepting_key(leaves, &original) {
+                    Ok(Picked {
+                        action: original,
+                        template,
+                    })
+                } else {
+                    let available: Vec<_> = leaves
+                        .as_slice()
+                        .iter()
+                        .map(|(template, _)| template)
+                        .collect();
+                    bail!(
+                        "reproduce: action {:?} not produced by the spec at this state:\n\n{:?}",
+                        original,
+                        available
+                    );
+                }
+            }
+        }
+    }
+
+    fn stop(
+        &mut self,
+        reason: ExitReason,
+    ) -> Result<ControlFlow<ExitReason, Picked<TerminalAction>>> {
+        Ok(ControlFlow::Stop(reason))
+    }
+}
+
+impl<Rng: TryRng + RngExt> RunStrategy<TerminalSession>
+    for TerminalStrategy<Rng>
+{
+    type StopValue = ExitReason;
+
+    #[hotpath::measure]
+    fn on_new_state(
+        &mut self,
+        state: &TerminalState,
+        leaves: &Leaves<'_, TerminalActionTemplate>,
+        _last_action: Option<&TerminalAction>,
+        _snapshots: &[Snapshot],
+        properties: PropertiesState<'_>,
+    ) -> Result<ControlFlow<Self::StopValue, Picked<TerminalAction>>> {
+        use std::fmt::Write;
+
+        self.states_seen += 1;
+
+        let mut buffer =
+            String::with_capacity(state.grid.size.cell_count() as usize * 4);
+        write!(buffer, "\x1b[2J\x1b[H")?;
+
+        let test_start = *self.test_start.get_or_insert(
+            bombadil_schema::Time::from_system_time(state.timestamp),
+        );
+
+        // Render currently visible grid
+        if !self.quiet {
+            for row_index in 0..state.grid.size.rows {
+                for column_index in 0..state.grid.size.columns {
+                    match &state.grid[(row_index, column_index)] {
+                        TerminalCell::Occupied {
+                            contents,
+                            wide: _,
+                            style,
+                        } => {
+                            let style: owo_colors::Style = to_owo_style(style);
+                            if contents.is_empty() {
+                                write!(buffer, "{}", " ".style(style))?;
+                            } else {
+                                write!(buffer, "{}", contents.style(style))?;
+                            };
+                        }
+                        TerminalCell::Continuation { .. } => {}
+                        TerminalCell::Empty { style } => {
+                            let style: owo_colors::Style = to_owo_style(style);
+                            write!(buffer, "{}", " ".style(style))?;
+                        }
+                    };
+                }
+                writeln!(buffer)?;
+            }
+        }
+
+        self.violations_count += properties.violations.len() as u64;
+        if !self.quiet {
+            for violation in properties.violations {
+                log::info!("violation of property `{}`", violation.name);
+                let schema_violation = violation.to_schema();
+                let markup = bombadil_schema::markup::render_violation(
+                    &schema_violation,
+                );
+                let text = styled::markup_to_styled(&markup, test_start);
+                println!(
+                    "\n{}\n\n{}\n",
+                    styled::maybe_red(styled::maybe_bold(format!(
+                        "{} was violated:",
+                        violation.name
+                    ))),
+                    text
+                );
+            }
+        }
+
+        if self.violations_count > 0 && self.exit_on_violation {
+            return self.stop(ExitReason::ExitOnViolation);
+        }
+
+        if let TerminalTestMode::Reproduce(remaining) = &self.mode
+            && remaining.is_empty()
+        {
+            log::info!("reproduction complete, stopping");
+            return self.stop(ExitReason::Reproduced);
+        }
+
+        if let Some(status) = &state.exit_status {
+            log::info!("process terminated, stopping");
+            return self.stop(ExitReason::Terminated(status.clone()));
+        }
+
+        if let Some(deadline) = self.deadline()
+            && state.timestamp() >= deadline
+        {
+            log::info!("time limit reached, stopping");
+            return self.stop(ExitReason::TimeLimit);
+        }
+
+        let picked = self.pick_action(leaves)?;
+        let elapsed = std::time::Duration::from_micros(
+            state
+                .timestamp()
+                .as_micros()
+                .saturating_sub(test_start.as_micros()),
+        );
+        if !self.quiet {
+            writeln!(
+                buffer,
+                "{} {}",
+                Formatted(&elapsed),
+                Formatted(&picked.action)
+            )?;
+            print!("{}", buffer);
+            std::io::stdout().flush()?;
+        }
+
+        Ok(ControlFlow::Continue(picked))
+    }
+
+    fn deadline(&self) -> Option<bombadil_schema::Time> {
+        self.deadline.map(bombadil_schema::Time::from_system_time)
+    }
+
+    fn on_time_limit(&mut self) -> Result<Self::StopValue> {
+        Ok(ExitReason::TimeLimit)
+    }
+
+    fn on_stalled(&mut self) -> Result<Self::StopValue> {
+        Ok(ExitReason::Stalled)
+    }
+
+    fn on_interrupted(&mut self) -> Result<Self::StopValue> {
+        Ok(ExitReason::Interrupted)
+    }
+}
+
+pub enum ExitReason {
+    ExitOnViolation,
+    TimeLimit,
+    Stalled,
+    Interrupted,
+    Terminated(ProcessExitStatus),
+    Reproduced,
+    AllDefinite,
+}
+
+#[hotpath::measure]
+fn to_owo_style(value: &TerminalStyle) -> owo_colors::Style {
+    let mut style = owo_colors::Style::new();
+
+    if let Some(color) = to_owo_color(&value.foreground_color) {
+        style = style.color(color);
+    }
+    if let Some(color) = to_owo_color(&value.background_color) {
+        style = style.on_color(color);
+    }
+
+    if value.attributes.contains(TerminalAttributes::BOLD) {
+        style = style.bold();
+    }
+    if value.attributes.contains(TerminalAttributes::ITALIC) {
+        style = style.italic();
+    }
+    if value.attributes.contains(TerminalAttributes::BLINK) {
+        style = style.blink();
+    }
+    if value.attributes.contains(TerminalAttributes::INVERSE) {
+        // unsupported?
+    }
+    if value.attributes.contains(TerminalAttributes::STRIKETHROUGH) {
+        style = style.strikethrough();
+    }
+    if value.attributes.contains(TerminalAttributes::DIM) {
+        style = style.dimmed();
+    }
+
+    if !matches!(value.underline, TerminalUnderline::None) {
+        style = style.underline();
+    }
+
+    style
+}
+
+fn to_owo_color(value: &TerminalColor) -> Option<owo_colors::DynColors> {
+    use owo_colors::DynColors;
+    match value {
+        TerminalColor::None => None,
+        TerminalColor::Palette(index) => {
+            Some(DynColors::Xterm(XtermColors::from(*index)))
+        }
+        TerminalColor::RGB { r, g, b } => Some(DynColors::Rgb(*r, *g, *b)),
+    }
+}

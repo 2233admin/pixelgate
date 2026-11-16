@@ -510,6 +510,53 @@ a check on, look at what it finds, and then make it gate. `approve` accepts
 pixels, not findings: an approved snapshot that still has a gating finding
 keeps the run failing until the page is fixed.
 
+## Explore (property-based testing)
+
+Checks above look at pages you listed. `pixelgate explore` finds states you did
+not think of: an engine clicks, types and scrolls through the page at random and
+checks properties (LTL formulas) after every step, by default "no uncaught
+exceptions" and the like. pixelgate starts Chromium with Playwright, so its
+config applies, and the engine attaches to that page. The engine is
+[Bombadil](https://github.com/antithesishq/bombadil), vendored in `engine/` and
+built per `engine/README.md` (distribution comes later).
+
+```sh
+pixelgate explore http://localhost:3000 --engine path/to/bombadil --time-limit 2m
+pixelgate explore http://localhost:3000 my-spec.ts   # own properties; PIXELGATE_ENGINE instead of --engine
+```
+
+| Flag | |
+| --- | --- |
+| `--engine <path>` | Engine binary; else `PIXELGATE_ENGINE`. Missing: exit 2. |
+| `--time-limit <dur>` | `60s` default; a number with `s`/`m`/`h`/`d`. |
+| `--keep-going` | Keep exploring after a violation (default stops at the first). |
+| `--headed` | Show the browser. |
+| `--width`, `--height`, `--device-scale-factor` | Viewport, default 1280x720 at 1. No `--device` mobile emulation. |
+| `--allow-url <pattern>` | Exploration boundary as a Chrome match pattern, repeatable. Not derived from `allowedHostnames`. |
+
+From the pixelgate config (if there is one) it uses `outDir`, `extraHTTPHeaders`
+(first Chromium target) and `allowedHostnames`, all applied by Playwright; headers
+never reach the engine's command line. The programmatic `explore(options)` takes
+the same options.
+
+Output in `<outDir>/explore/`: `explore.html` (violations first, with the
+screenshot of their state and what the property saw, then every state),
+`explore.json`, `states/` (screenshots), `trace.bin` (replay it with the
+engine's `--reproduce`) and `engine.log`.
+
+Exit code: 0 no violations, 1 violations in the trace, 2 engine, usage or trace
+problem (the engine's own exit code is not used for violations).
+
+Specs are Bombadil-compatible: see its documentation for writing properties and
+custom actions.
+
+Caveats: Chromium only. The explored page's scripts are instrumented for
+coverage, so its timings and screenshots are not comparable to captures.
+Exploration clicks every button and submits every form it finds, including
+destructive ones: run it against local or throwaway environments (pixelgate warns
+for any origin that is not localhost, `127.0.0.1`, `[::1]`, `*.localhost` or
+`file:`).
+
 ## ARIA snapshots
 
 A screenshot shows what the page looks like. An ARIA snapshot records what a
