@@ -30,6 +30,10 @@ const ticker = `<!doctype html><body style="margin:0;font:40px monospace"><div i
 const settle = `<!doctype html><body style="margin:0;font:40px monospace"><div id="t">start</div>
 <script>let n = 0; const id = setInterval(() => { document.getElementById('t').textContent = n++ < 15 ? 'tick ' + n : 'done';
   if (n > 15) clearInterval(id); }, 100);</script></body>`;
+// A panel that only appears after a click.
+const menu = `<!doctype html><body style="margin:0;font:20px sans-serif">
+<button id="toggle" onclick="document.getElementById('panel').hidden = false">Open</button>
+<div id="panel" hidden style="width:200px;height:100px;background:#16a34a;color:#fff">Panel</div></body>`;
 
 let server: Server;
 let origin: string;
@@ -54,7 +58,7 @@ const file = (...p: string[]) => path.join(tmp, '.pixelgate', ...p);
 
 beforeAll(async () => {
   server = createServer((req, res) => {
-    const body = req.url === '/ticker' ? ticker : req.url === '/settle' ? settle : home();
+    const body = req.url === '/ticker' ? ticker : req.url === '/settle' ? settle : req.url === '/menu' ? menu : home();
     res.writeHead(200, { 'content-type': 'text/html' }).end(body);
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -164,6 +168,38 @@ describe('pluggable comparator + codec', () => {
 
     await approve(cfg());
     assert.equal((await run(cfg())).summary.unchanged, 1);
+  });
+});
+
+describe('beforeCapture', () => {
+  it('drives the page into the state to capture', async () => {
+    const cfg = cfgWith({
+      outDir: '.pixelgate-menu',
+      targets: { desktop: { viewport: '400x200' } },
+      pages: [
+        { name: 'closed', url: `${origin}/menu` },
+        { name: 'open', url: `${origin}/menu`, beforeCapture: (page) => page.click('#toggle') },
+      ],
+    });
+    const r = await run(cfg);
+    assert.equal(r.summary.added, 2, JSON.stringify(r.results));
+    const dir = path.join(tmp, '.pixelgate-menu', 'baseline', `desktop-${platform}`);
+    const [closed, open] = await Promise.all([readFile(path.join(dir, 'closed.png')), readFile(path.join(dir, 'open.png'))]);
+    assert.ok(!closed.equals(open), 'the click changed what was captured');
+    assert.equal((await run(cfg)).summary.unchanged, 2, 'and does so reproducibly');
+  });
+
+  it('a failing beforeCapture is a capture error, not a crash', async () => {
+    const r = await run(
+      cfgWith({
+        outDir: '.pixelgate-menu-err',
+        targets: { desktop: { viewport: '400x200' } },
+        timeoutMs: 2_000,
+        pages: [{ name: 'missing', url: `${origin}/menu`, beforeCapture: (page) => page.click('#nope', { timeout: 500 }) }],
+      }),
+    );
+    assert.equal(r.results[0]!.status, 'error');
+    assert.match(r.results[0]!.error!, /#nope|Timeout/);
   });
 });
 

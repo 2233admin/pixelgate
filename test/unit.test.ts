@@ -18,6 +18,7 @@ import { resolveUrl, safeName } from '../src/names.js';
 import { determineOutcome, type OutcomeInput } from '../src/outcome.js';
 import { summarize } from '../src/report.js';
 import { storiesFromIndex } from '../src/storybook.js';
+import { esmEntry } from '../src/vite.js';
 import { pixelgateScreenshots, snapshotName } from '../src/vitest.js';
 
 function png(width: number, height: number, paint: (x: number, y: number) => [number, number, number]): Buffer {
@@ -355,6 +356,19 @@ describe('misc', () => {
     assert.equal(resolveUrl('/settings', 'http://h:5173/app/'), 'http://h:5173/app/settings');
     assert.equal(resolveUrl('/', 'http://h:5173/app'), 'http://h:5173/app/');
     assert.throws(() => resolveUrl('/x', undefined), /relative/);
+  });
+  it('esmEntry picks the ESM file from package exports (Vite 5 ships CJS under `require`)', () => {
+    // Vite 5.4 shape: nested conditions, `require` listed first.
+    const vite5 = {
+      require: { types: './index.d.cts', default: './index.cjs' },
+      import: { types: './dist/node/index.d.ts', default: './dist/node/index.js' },
+    };
+    assert.equal(esmEntry(vite5), './dist/node/index.js');
+    // Vite 6+ shape: ESM only.
+    assert.equal(esmEntry({ types: './dist/node/index.d.ts', default: './dist/node/index.js' }), './dist/node/index.js');
+    assert.equal(esmEntry('./index.js'), './index.js');
+    assert.equal(esmEntry(undefined), undefined);
+    assert.equal(esmEntry({ require: './index.cjs' }), undefined);
   });
   it('summarize honours failOn', () => {
     const rs = [{ target: 't', name: 'a', status: 'added' as const }];

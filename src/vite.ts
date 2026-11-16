@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -19,15 +20,37 @@ interface ViteApi {
   build(config: object): Promise<unknown>;
 }
 
-/** Load the project's own Vite, not one bundled with pixelgate. */
+type ExportTarget = string | { [condition: string]: ExportTarget } | null | undefined;
+
+/** Pick the ESM file from an `exports["."]` entry: `import` before `default`/`node`, nested conditions allowed. */
+export function esmEntry(target: ExportTarget): string | undefined {
+  if (!target || typeof target === 'string') return target ?? undefined;
+  for (const key of ['import', 'module', 'node', 'default']) {
+    const hit = esmEntry(target[key]);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/**
+ * Load the project's own Vite, not one bundled with pixelgate.
+ *
+ * `require.resolve('vite')` would pick the `require` condition: Vite 5's CJS
+ * build, which (deprecated, and) exposes no named exports through `import()`.
+ * So read the package's `exports` and import its ESM entry.
+ */
 async function importVite(root: string): Promise<ViteApi> {
-  let entry: string;
+  let pkgFile: string;
   try {
-    entry = createRequire(path.join(root, 'package.json')).resolve('vite');
+    pkgFile = createRequire(path.join(root, 'package.json')).resolve('vite/package.json');
   } catch {
     throw new Error(`The \`vite\` option needs the \`vite\` package installed for ${root}`);
   }
-  return (await import(pathToFileURL(entry).href)) as ViteApi;
+  const pkg = JSON.parse(await readFile(pkgFile, 'utf8')) as { exports?: Record<string, ExportTarget>; module?: string; main?: string };
+  const rel = esmEntry(pkg.exports?.['.']) ?? pkg.module ?? pkg.main ?? 'index.js';
+  const mod = (await import(pathToFileURL(path.join(path.dirname(pkgFile), rel)).href)) as ViteApi & { default?: ViteApi };
+  // Fall back to a CJS default export if some version only ships that.
+  return typeof mod.build === 'function' ? mod : (mod.default ?? mod);
 }
 
 /** Start the project's Vite dev server, or build + preview it, on a loopback port. */

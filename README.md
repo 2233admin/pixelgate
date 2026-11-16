@@ -65,6 +65,29 @@ export default defineConfig({
 
 `.js`, `.mjs` and `.json` configs work too.
 
+### Interactions
+
+A page entry captures the page as loaded. To capture a state the user reaches
+by interacting (an open menu, a selected row, a filled form), give it a
+`beforeCapture` hook. It gets the Playwright `Page` after load and `waitFor`,
+before the stability loop:
+
+```ts
+pages: [
+  { name: 'graph', url: '/', waitFor: '.node >> nth=2' },
+  {
+    name: 'graph-selected',
+    url: '/',
+    waitFor: '.node >> nth=2',
+    beforeCapture: (page) => page.locator('.node').nth(1).click(),
+  },
+],
+```
+
+A hook that throws (say, a selector that no longer exists) makes that snapshot
+an `error`, not a crashed run. Hooks are functions, so they need a `.ts`,
+`.js` or `.mjs` config.
+
 ## Use
 
 ```bash
@@ -176,7 +199,7 @@ export default defineConfig({
 });
 ```
 
-pixelgate loads the project's own `vite` package, starts the server on
+pixelgate loads the project's own `vite` (5 or later), starts the server on
 `127.0.0.1` (HMR off), resolves relative URLs against it (your `base`, e.g.
 `/app/`, is kept), and closes it when the run ends. Options: `root`,
 `configFile`, `port`, `build`. Not on Vite? Run your server yourself and set

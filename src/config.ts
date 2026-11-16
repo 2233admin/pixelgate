@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import type { Page } from 'playwright';
 import { CODECS, COMPARATORS, type Codec, type Comparator } from './compare.js';
 
 export type BrowserName = 'chromium' | 'firefox' | 'webkit';
@@ -33,6 +34,12 @@ export interface PageSnap {
   waitFor?: string;
   /** Capture the full scrollable page (ignored when `selector` is set). Default true. */
   fullPage?: boolean;
+  /**
+   * Put the page into the state to capture (open a menu, select a row, fill a
+   * form) with Playwright's own API. Runs after the page has loaded and
+   * `waitFor` is visible, before the stability loop. TS/JS configs only.
+   */
+  beforeCapture?: (page: Page) => Promise<void> | void;
 }
 
 export interface StorybookSource {

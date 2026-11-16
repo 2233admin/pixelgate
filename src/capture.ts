@@ -79,6 +79,7 @@ async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise
   await page.waitForLoadState('networkidle', { timeout: Math.min(5_000, timeoutMs) }).catch(() => {});
   await page.addStyleTag({ content: STABILIZE_CSS + (stabilize.css ?? '') });
   if (snap.waitFor) await page.locator(snap.waitFor).first().waitFor({ state: 'visible', timeout: timeoutMs });
+  if (snap.beforeCapture) await snap.beforeCapture(page);
   await page.evaluate(async () => {
     await document.fonts.ready;
     // Let images already in the DOM finish decoding.
