@@ -86,22 +86,31 @@ export async function measureOverflow(page: Page): Promise<number> {
   });
 }
 
-/** axe-core on the page, scoped to `selector` when it is plain CSS (axe cannot read Playwright selectors). */
+/** Marks the element a selector snapshot captured, so axe checks exactly that one. */
+const AXE_SCOPE_ATTR = 'data-pixelgate-axe-scope';
+
+/**
+ * axe-core on the page, or on the element the screenshot captured when the snapshot has
+ * a `selector`. The screenshot takes the first match (`locator().first()`), so axe must
+ * too: `include(selector)` would check every match, and accept no Playwright selectors.
+ */
 export async function runAxe(page: Page, selector: string | undefined, opts: Required<A11yOptions>): Promise<A11yViolation[]> {
   let axe = new AxeBuilder({ page }).withTags(opts.tags);
   if (opts.disableRules.length) axe = axe.disableRules(opts.disableRules);
-  if (selector) {
-    const css = await page.evaluate((s) => {
-      try {
-        document.querySelector(s);
-        return true;
-      } catch {
-        return false;
-      }
-    }, selector);
-    if (css) axe = axe.include(selector);
+  const scoped = selector
+    ? await page
+        .locator(selector)
+        .first()
+        .evaluate((el, attr) => el.setAttribute(attr, ''), AXE_SCOPE_ATTR)
+        .then(() => true)
+    : false;
+  if (scoped) axe = axe.include(`[${AXE_SCOPE_ATTR}]`);
+  let violations: Awaited<ReturnType<AxeBuilder['analyze']>>['violations'];
+  try {
+    ({ violations } = await axe.analyze());
+  } finally {
+    if (scoped) await page.locator(`[${AXE_SCOPE_ATTR}]`).evaluateAll((els, attr) => els.forEach((e) => e.removeAttribute(attr)), AXE_SCOPE_ATTR);
   }
-  const { violations } = await axe.analyze();
   const min = IMPACTS.indexOf(opts.minImpact);
   return violations
     .filter((v) => IMPACTS.indexOf(v.impact ?? 'minor') >= min)

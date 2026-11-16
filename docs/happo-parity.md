@@ -45,7 +45,7 @@ Status: HAVE / PARTIAL / GAP / N/A (SaaS-only, out of scope for a self-hosted to
 
 | Happo | | pixelgate | Status |
 | --- | --- | --- | --- |
-| accessibility target | axe-core per snapshot, WCAG 2.0/2.1 A/AA, `window.happoAxeOptions` | `checks.a11y` (`@axe-core/playwright`): tags, `disableRules`, `minImpact`, scoped to the snapshot's selector | HAVE |
+| accessibility target | axe-core per snapshot, WCAG 2.0/2.1 A/AA, `window.happoAxeOptions` | `checks.a11y` (`@axe-core/playwright`): tags, `disableRules`, `minImpact`, scoped to the element a selector snapshot captured | HAVE |
 | ARIA snapshots | text tree of what a screen reader gets, diffed | none | GAP (Playwright `locator.ariaSnapshot()` built in) |
 | `detectHorizontalOverflow` | measure how far a page reaches past the viewport's right edge | `checks.overflow` (global or per target) → `overflowPx` | HAVE |
 | `blockApproval.renderErrors` | page errors block approval | `failOn: ['pageErrors']` | HAVE |

@@ -82,6 +82,9 @@ beforeAll(async () => {
       '/dark': () => dark,
       '/a11y': () => `<!doctype html><html lang="en"><body style="margin:0">
 <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="40" height="40"><div id="ok"><button>Ok</button></div></body></html>`,
+      '/cards': () => `<!doctype html><html lang="en"><body style="margin:0">
+<div class="card"><button>Ok</button></div>
+<div class="card"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="40" height="40"></div></body></html>`,
       '/wide': () => `<!doctype html><body style="margin:0"><div style="width:900px;height:10px;background:#000"></div></body>`,
       '/boom': () => `<!doctype html><body style="margin:0"><script>throw new Error('boom')</script></body>`,
       '/external': external,
@@ -331,6 +334,14 @@ describe('checks without a baseline: a11y, overflow, page errors', () => {
 
     const scoped = await run(at('.pg-a11y-ok', '/a11y', { checks: { a11y: true } }, { selector: '#ok' }));
     assert.equal(scoped.results[0]!.a11y, undefined, JSON.stringify(scoped.results[0]));
+  });
+
+  it('a11y checks the element the screenshot captured: the first match, Playwright selectors too', async () => {
+    // Second `.card` has an image without alt, but the screenshot is of the first one.
+    const first = await run(at('.pg-a11y-first', '/cards', { checks: { a11y: true } }, { selector: '.card' }));
+    assert.equal(first.results[0]!.a11y, undefined, JSON.stringify(first.results[0]));
+    const nth = await run(at('.pg-a11y-nth', '/cards', { checks: { a11y: true } }, { selector: '.card >> nth=1' }));
+    assert.deepEqual(nth.results[0]!.a11y?.map((v) => v.id), ['image-alt'], JSON.stringify(nth.results[0]));
   });
 
   it('overflow: measured on the target that enables it, absent on a page that fits', async () => {

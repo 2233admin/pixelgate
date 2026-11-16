@@ -372,7 +372,7 @@ export default defineConfig({
 
 | check | finds | in the result |
 | --- | --- | --- |
-| `a11y` | axe-core rule violations, scoped to `selector` when the snapshot has one (CSS selectors only) | `a11y`: rule id, impact, help link, element count, first selectors |
+| `a11y` | axe-core rule violations; for a `selector` snapshot, in the element the screenshot captured | `a11y`: rule id, impact, help link, element count, first selectors |
 | `overflow` | a page wider than the viewport, i.e. one that scrolls sideways | `overflowPx`: how far past the right edge |
 | page errors | uncaught exceptions while rendering (always collected) | `pageErrors` |
 
