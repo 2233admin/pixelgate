@@ -536,7 +536,7 @@ Linux x64 and arm64 with glibc, macOS arm64; elsewhere build it and set
 | `PIXELGATE_ENGINE_OFFLINE=1` | Never download; fail if the cache is empty. |
 | `PIXELGATE_CACHE_DIR` | Cache root. |
 | `PIXELGATE_ENGINE_TIMEOUT_MS` | Download timeout, default 120000. |
-| `NODE_USE_ENV_PROXY=1` | Make the download honour `HTTP(S)_PROXY`. |
+| `NODE_USE_ENV_PROXY=1` | Make the download honour `HTTP(S)_PROXY` (Node 22.21+ or 24+; older Node ignores it, so download the engine yourself and set `PIXELGATE_ENGINE`). |
 
 Verifying the engine: npm provenance covers the package, whose
 `engine-manifest.json` pins each binary's sha256. The release also carries

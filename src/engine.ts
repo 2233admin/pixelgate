@@ -134,7 +134,7 @@ function downloadFailure(url: string, cause: unknown): Error {
     cause instanceof Error ? `${cause.message}${cause.cause instanceof Error ? ` (${cause.cause.message})` : ''}` : String(cause);
   return new Error(
     `could not download the engine from ${url}: ${detail}. ` +
-      'Set PIXELGATE_ENGINE_MIRROR to a reachable mirror (behind a proxy: NODE_USE_ENV_PROXY=1), or set PIXELGATE_ENGINE to a local build (engine/README.md).',
+      'Set PIXELGATE_ENGINE_MIRROR to a reachable mirror (behind a proxy: NODE_USE_ENV_PROXY=1, Node 22.21+ or 24+), or set PIXELGATE_ENGINE to a local build (engine/README.md).',
     { cause },
   );
 }
@@ -173,7 +173,12 @@ async function download(url: string, entry: EngineManifestEntry, final: string, 
         // Stop at the pinned size: a wrong or hostile server must not fill the disk.
         if (received > entry.size) throw new BodyError(`engine download from ${url} is larger than the pinned ${entry.size} bytes; aborted`);
         hash.update(chunk);
-        await handle.write(chunk);
+        // write() may write less than asked (disk full, file-size limit): loop until all of it is on disk.
+        for (let off = 0; off < chunk.byteLength; ) {
+          const { bytesWritten } = await handle.write(chunk, off);
+          if (bytesWritten <= 0) throw new Error(`could not write ${tmp}`);
+          off += bytesWritten;
+        }
       }
     } catch (e) {
       throw e instanceof BodyError ? e : downloadFailure(url, e);
@@ -183,6 +188,8 @@ async function download(url: string, entry: EngineManifestEntry, final: string, 
     const digest = hash.digest('hex');
     if (received !== entry.size) throw new Error(`engine download from ${url} is ${received} bytes, expected ${entry.size}; discarded`);
     if (digest !== entry.sha256) throw new Error(`engine download from ${url} has sha256 ${digest}, expected ${entry.sha256}; discarded`);
+    // What runs is what reached the disk, not what came over the wire.
+    if (!(await verified(tmp, entry))) throw new Error(`engine written to ${tmp} does not match the pinned size and sha256; discarded`);
     return tmp;
   } catch (e) {
     await handle?.close().catch(() => {});
@@ -234,20 +241,23 @@ export async function resolveEngine(opts: ResolveEngineOptions = {}): Promise<st
   const dir = path.join(cacheRoot(), 'pixelgate', 'engine', version);
   const final = path.join(dir, entry.file);
   // The file is ~16 MB: re-hashing it on every resolve is cheap, trusting a cached file is not.
+  // A bad cached file is left in place: the verified download replaces it with one rename, so a
+  // parallel resolve that already repaired it never loses its file.
+  let state = 'is not cached';
   if (existsSync(final)) {
     if (await verified(final, entry)) return final;
+    state = 'in the cache does not match the pinned hash';
     log(`cached engine ${final} does not match the pinned hash; fetching it again`);
-    await rm(final, { force: true });
   }
 
   if (process.env.PIXELGATE_ENGINE_OFFLINE === '1') {
     throw new Error(
-      `engine ${entry.file} is not cached (${final}) and PIXELGATE_ENGINE_OFFLINE=1 forbids downloading. ` +
+      `engine ${entry.file} ${state} (${final}) and PIXELGATE_ENGINE_OFFLINE=1 forbids downloading. ` +
         'Run `pixelgate engine install` online first, or set PIXELGATE_ENGINE.',
     );
   }
   if (opts.download === false) {
-    throw new Error(`engine ${entry.file} is not cached (${final}). Run \`pixelgate engine install\` to download it, or set PIXELGATE_ENGINE.`);
+    throw new Error(`engine ${entry.file} ${state} (${final}). Run \`pixelgate engine install\` to download it, or set PIXELGATE_ENGINE.`);
   }
 
   const base = (process.env.PIXELGATE_ENGINE_MIRROR || DEFAULT_MIRROR).replace(/\/+$/, '');

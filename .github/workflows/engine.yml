@@ -53,7 +53,9 @@ jobs:
 
       # A release build starts cold: a cache saved by another branch's run could carry a
       # tampered target/, and `--locked` does not check cached build output.
-      - if: inputs.cache != false
+      # Off only when a caller passes cache: false. On push/PR/dispatch `inputs.cache` is unset,
+      # and `inputs.cache != false` would read unset as false (loose comparison) and skip the cache.
+      - if: toJSON(inputs.cache) != 'false'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: engine/bombadil

@@ -173,6 +173,17 @@ describe('resolveEngine', () => {
     expect(requests).toHaveLength(1);
   });
 
+  it('with download:false leaves a corrupt cached file in place and says so', async () => {
+    await resolveEngine(opts());
+    const junk = randomBytes(payload.length);
+    await writeFile(finalPath(), junk);
+    requests = [];
+    await expect(resolveEngine(opts({ download: false }))).rejects.toThrow(/does not match the pinned hash/);
+    expect(requests).toEqual([]);
+    // Only a verified download replaces it, so a parallel resolve's repair is never deleted.
+    expect(await readFile(finalPath())).toEqual(junk);
+  });
+
   it('survives two parallel resolves with one valid file', async () => {
     const [a, b] = await Promise.all([resolveEngine(opts()), resolveEngine(opts())]);
     expect(a).toBe(b);
