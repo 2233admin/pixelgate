@@ -71,6 +71,16 @@ jobs:
         env:
           PIXELGATE_TEST_TMP: ${{ runner.temp }}
 
+      # What the Playwright Test e2e captured, to see a rendering difference.
+      - name: Upload Playwright fixture output
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-app-${{ strategy.job-index }}
+          path: test/fixtures/playwright-app/.pixelgate/
+          include-hidden-files: true
+          if-no-files-found: ignore
+
   latest-deps:
     # Policy: every dependency on its latest release. Red here means "run pnpm deps:latest".
     name: dependencies are latest

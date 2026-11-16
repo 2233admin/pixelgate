@@ -15,8 +15,8 @@ out of scope for a self-hosted tool). Updated with each parity slice.
    screenshots, exact text compare, unified diff, approved and pruned with the screenshot.
 4. **Capture options** (4a, done): `maxHeight`/`maxWidth` (default 5000px tall),
    `includeOutlinesAndShadows`, `applyPseudoClasses`.
-   **Playwright Test fixture** (4b, next): `pixelgate/playwright` running pixelgate's own
-   pipeline on the test's page, results gathered by a Playwright reporter.
+   **Playwright Test fixture** (4b, done): `pixelgate/playwright` running pixelgate's own
+   pipeline on the test's page, results gathered by `pixelgate/playwright-reporter`.
 Status: HAVE / PARTIAL / GAP / N/A (SaaS-only, out of scope for a self-hosted tool).
 
 ## Rendering determinism
@@ -74,7 +74,7 @@ Status: HAVE / PARTIAL / GAP / N/A (SaaS-only, out of scope for a self-hosted to
 | Storybook | + per-story `beforeScreenshot`, `delay`, `waitForContent`, targets | stories from index.json, include/exclude globs | PARTIAL (no per-story params) |
 | Pages (full-page URLs) | `waitForContent`, `waitForSelector` | `pages` + `waitFor` (+ `text=` selectors) | HAVE |
 | Vitest browser mode | | `pixelgate/vitest` | HAVE |
-| Playwright Test | `happoScreenshot(page, locator, {component, variant})` fixture, `mergeTests` | none | GAP |
+| Playwright Test | `happoScreenshot(page, locator, {component, variant})` fixture, `mergeTests` | `pixelgate/playwright` (`test` with a `pixelgate` fixture, mergeable): `pixelgate.screenshot(name, {locator, mask, ...})` on the test's page; `pixelgate/playwright-reporter` writes the report and gates per `failOn` | HAVE (no `removed` detection or shard merge yet) |
 | Cypress | `cy.happoScreenshot()` | none | GAP |
 | Custom (register examples in a JS bundle) | | none (Storybook covers most) | GAP (low) |
 | Native apps (upload images) | | none | N/A for now |

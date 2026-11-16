@@ -22,6 +22,9 @@ import { isCI, parseViewport, resolveChecks, resolveConfig } from '../src/config
 import { resolveUrl, safeName } from '../src/names.js';
 import { determineOutcome, type OutcomeInput } from '../src/outcome.js';
 import { approve, buildReport, readReport, summarize, writeReport, type Report, type SnapshotResult } from '../src/report.js';
+import type { FullConfig, FullResult, TestCase, TestResult } from '@playwright/test/reporter';
+import PixelgatePlaywrightReporter, { REPORTER_ENV } from '../src/playwright-reporter.js';
+import { outDirOf, updateMode } from '../src/playwright-shared.js';
 import { commentMarker, renderMarkdown } from '../src/markdown.js';
 import { storiesFromIndex } from '../src/storybook.js';
 import { esmEntry } from '../src/vite.js';
@@ -709,5 +712,69 @@ describe('size caps', () => {
     assert.match(md, /#### Notes/);
     assert.match(md, /\| cut at the size cap \| `long` \| `t` \| full 400x8000px, compared up to the cap \|/);
     assert.match(md, /\| pseudo-classes not forced \| `menu` \| `t` \| unreadable: `https:\/\/cdn\.example\/a\.css` \|/);
+  });
+});
+
+describe('playwright test integration', () => {
+  it('updateMode: explicit update wins; else --update-snapshots, and the default follows the CI rule', () => {
+    assert.equal(updateMode({ update: 'none' }, 'all'), 'none');
+    assert.deepEqual(['all', 'changed', 'missing', 'none'].map((u) => updateMode({}, u)), ['all', 'all', 'new', 'none']);
+    assert.equal(updateMode({}, 'default'), isCI() ? 'none' : 'new');
+  });
+
+  it('outDirOf resolves against the config file directory', () => {
+    const cfgFile = path.resolve('proj', 'playwright.config.ts');
+    assert.equal(outDirOf({ configFile: cfgFile }, {}), path.resolve('proj', '.pixelgate'));
+    assert.equal(outDirOf({ configFile: cfgFile }, { outDir: 'vr' }), path.resolve('proj', 'vr'));
+  });
+
+  it('reporter: a retry replaces the earlier attempt, a name shared by two tests is an error, failOn fails the run', async () => {
+    const outDir = await mkdtemp(path.join(process.env.PIXELGATE_TEST_TMP ?? os.tmpdir(), 'pixelgate-pw-'));
+    const env = process.env[REPORTER_ENV];
+    try {
+      const rep = new PixelgatePlaywrightReporter();
+      assert.equal(process.env[REPORTER_ENV], '1', 'workers learn from the env that the reporter is configured');
+      rep.onBegin({ projects: [], configFile: path.join(outDir, 'playwright.config.ts') } as unknown as FullConfig);
+      const att = (name: string, status: SnapshotResult['status']) => ({
+        name: 'pixelgate-result',
+        contentType: 'application/json',
+        body: Buffer.from(JSON.stringify({ outDir, failOn: ['changed', 'error'], result: { target: 'desktop', name, status } })),
+      });
+      const tc = (id: string) => ({ id, titlePath: () => ['', 'a.spec.ts', id] }) as unknown as TestCase;
+      const end = (id: string, ...a: ReturnType<typeof att>[]) => rep.onTestEnd(tc(id), { attachments: a } as unknown as TestResult);
+      end('first', att('x', 'changed'));
+      end('first', att('x', 'unchanged')); // retry
+      end('b', att('y', 'unchanged'));
+      end('c', att('y', 'unchanged'));
+      assert.deepEqual(await rep.onEnd({ status: 'passed' } as FullResult), { status: 'failed' });
+      const report = await readReport({ outDir });
+      const by = Object.fromEntries(report.results.map((r) => [r.name, r]));
+      assert.equal(by.x!.status, 'unchanged');
+      assert.equal(by.y!.status, 'error');
+      assert.match(by.y!.error!, /more than one test: a\.spec\.ts > b; a\.spec\.ts > c/);
+
+      // Different names, same file: a collision too. Each row keeps its own failOn.
+      const rep2 = new PixelgatePlaywrightReporter();
+      const row = (name: string, status: SnapshotResult['status'], failOn: string[]) => ({
+        name: 'pixelgate-result',
+        contentType: 'application/json',
+        body: Buffer.from(JSON.stringify({ outDir, failOn, result: { target: 'desktop', name, status } })),
+      });
+      const end2 = (id: string, ...a: ReturnType<typeof row>[]) => rep2.onTestEnd(tc(id), { attachments: a } as unknown as TestResult);
+      end2('d', row('card/expanded', 'unchanged', ['error']));
+      end2('e', row('card_expanded', 'unchanged', ['error']));
+      end2('f', row('lenient', 'changed', []));
+      assert.deepEqual(await rep2.onEnd({ status: 'passed' } as FullResult), { status: 'failed' });
+      assert.equal((await readReport({ outDir })).results.find((r) => r.name === 'card_expanded' || r.name === 'card/expanded')!.status, 'error');
+
+      const rep3 = new PixelgatePlaywrightReporter();
+      rep3.onTestEnd(tc('g'), { attachments: [row('lenient', 'changed', []), row('strict', 'unchanged', ['changed'])] } as unknown as TestResult);
+      assert.equal(await rep3.onEnd({ status: 'passed' } as FullResult), undefined, "a changed row in a project with failOn [] does not fail the run");
+      assert.equal((await readReport({ outDir })).failed, false);
+    } finally {
+      if (env === undefined) delete process.env[REPORTER_ENV];
+      else process.env[REPORTER_ENV] = env;
+      await rm(outDir, { recursive: true, force: true });
+    }
   });
 });
