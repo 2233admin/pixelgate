@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { CHECKS, findConfigFile, loadConfig } from './config.js';
+import { resolveEngine } from './engine.js';
 import { explore } from './explore.js';
 import { renderMarkdown } from './markdown.js';
 import { approve, readReport, reportDir, type OutDir } from './report.js';
@@ -19,6 +20,7 @@ Usage:
   pixelgate explore  <url> [spec] [--engine <path>] [--time-limit <dur>] [--keep-going] [--headed]
                      [--width <px>] [--height <px>] [--device-scale-factor <n>] [--allow-url <pattern>]...
                      [--config <file>] [--out-dir <dir>]
+  pixelgate engine   install | path
 
 run      Capture every snapshot, diff against baseline, write <outDir>/report/.
          Exit 0 = pass, 1 = statuses in \`failOn\` present, 2 = usage/config error.
@@ -37,10 +39,13 @@ summary  Print the last report as Markdown for a pull-request comment or CI job
          summary. --image-base is the URL the report's image paths resolve
          against (no images without it).
 
-explore  Property-based exploration of <url> with the vendored Bombadil engine (--engine or
-         PIXELGATE_ENGINE): random clicks and typing, checked against LTL properties. Writes
+explore  Property-based exploration of <url> with the vendored Bombadil engine (--engine,
+         PIXELGATE_ENGINE, else downloaded and sha256-verified on first use): random clicks and typing, checked against LTL properties. Writes
          <outDir>/explore/. Exit 0 = no violations, 1 = violations, 2 = engine/usage error.
          Chromium only; it clicks everything, so point it at local or throwaway environments.
+engine   install: fetch the engine for this platform into the cache (e.g. in CI) and print its path.
+         path: print the path if it is already available (PIXELGATE_ENGINE or cache), without downloading.
+         Exit 2 when it is not.
 
 --json   Print the report JSON to stdout (progress goes to stderr).`;
 
@@ -188,6 +193,13 @@ ${['PASS', 'FAIL', 'ERROR'][r.exitCode]}  states ${rep.states.length}  violation
 report: ${path.join(r.dir, 'explore.html')}`,
     );
     return r.exitCode;
+  }
+  if (cmd === 'engine') {
+    const sub = positionals[1];
+    if ((sub !== 'install' && sub !== 'path') || positionals.length > 2) throw new Error('usage: pixelgate engine install | path');
+    const p = await resolveEngine({ engine: values.engine, download: sub === 'install', log });
+    console.log(p);
+    return 0;
   }
   log(`Unknown command "${cmd}"\n\n${HELP}`);
   return 2;

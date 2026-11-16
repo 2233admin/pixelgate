@@ -6,6 +6,7 @@ import path from 'node:path';
 import { chromium, type BrowserContext, type Page } from 'playwright';
 import { allowList, bareHost, isAllowed, watchPage, type PageLog } from './capture.js';
 import { findConfigFile, loadConfig, type PageSnap, type ResolvedChecks } from './config.js';
+import { resolveEngine } from './engine.js';
 import { MAX_LOGGED, type HttpError } from './report.js';
 
 /**
@@ -19,7 +20,7 @@ export interface ExploreOptions {
   url: string;
   /** Bombadil-compatible specification file (TS/JS). Default: the engine's built-in properties. */
   spec?: string;
-  /** Engine binary. Default: `PIXELGATE_ENGINE`. */
+  /** Engine binary. Default: `PIXELGATE_ENGINE`, else the verified prebuilt engine (downloaded on first use). */
   engine?: string;
   /** Engine time limit: a number with s/m/h/d suffix. Default `60s`. */
   timeLimit?: string;
@@ -303,9 +304,7 @@ export async function explore(opts: ExploreOptions): Promise<ExploreResult> {
   }
   if (!['http:', 'https:', 'file:'].includes(origin.protocol)) throw new Error(`explore: unsupported URL scheme "${origin.protocol}"`);
 
-  const engine = opts.engine ?? process.env.PIXELGATE_ENGINE;
-  if (!engine) throw new Error('explore: no engine binary. Pass --engine <path> or set PIXELGATE_ENGINE (build it per engine/README.md)');
-  if (!existsSync(engine)) throw new Error(`explore: engine binary not found: ${engine}`);
+  const engine = await resolveEngine({ engine: opts.engine, log });
   const spec = opts.spec ? path.resolve(cwd, opts.spec) : undefined;
   if (spec && !existsSync(spec)) throw new Error(`explore: specification file not found: ${spec}`);
   const timeLimit = opts.timeLimit ?? '60s';
@@ -421,6 +420,12 @@ export async function explore(opts: ExploreOptions): Promise<ExploreResult> {
       }
       c.on('error', (e) => {
         clearTimeout(watchdog);
+        const code = (e as NodeJS.ErrnoException).code;
+        // AppLocker/Defender can refuse a freshly downloaded binary; a trusted local build is the way out.
+        if (process.platform === 'win32' && (code === 'EACCES' || code === 'EPERM')) {
+          reject(new Error(`engine ${engine} could not be started (${code}): blocked by AppLocker/Defender? Set PIXELGATE_ENGINE to an engine build that is allowed to run (engine/README.md)`, { cause: e }));
+          return;
+        }
         reject(e);
       });
       c.on('close', (code) => {
