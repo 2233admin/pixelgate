@@ -1,0 +1,10 @@
+[package]
+name = "stdx"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+hegeltest.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,12 @@
+---
+source: lib/bombadil-browser/src/instrumentation/html.rs
+expression: output.snapshot()
+---
+<!DOCTYPE html><html><head></head><body>
+<template>
+<p>Leave template alone!</p>
+</template>
+
+
+</body></html>
+---- blocks ----

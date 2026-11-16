@@ -1,0 +1,285 @@
+use anyhow::{Context, Result, anyhow, bail};
+use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
+use cdp_protocol::cdp::browser_protocol::fetch;
+use cdp_protocol::cdp::browser_protocol::network;
+use cdp_protocol::cdp::browser_protocol::target::SessionId;
+use crossbeam_channel as mpmc;
+use log;
+use oxc::span::SourceType;
+use serde_json as json;
+use std::collections::HashMap;
+use std::thread;
+use url::Url;
+
+use crate::instrumentation;
+use crate::instrumentation::BlockRegistry;
+use crate::instrumentation::InstrumentationConfig;
+
+pub fn instrument_js_coverage(
+    connection: cdp::Connection,
+    session_id: &SessionId,
+    config: InstrumentationConfig,
+    blocks: BlockRegistry,
+    origin: Url,
+) -> Result<mpmc::Receiver<anyhow::Error>> {
+    connection
+        .send(
+            fetch::EnableParams::builder()
+                .pattern(
+                    fetch::RequestPattern::builder()
+                        .request_stage(fetch::RequestStage::Response)
+                        .resource_type(network::ResourceType::Script)
+                        .build(),
+                )
+                .pattern(
+                    fetch::RequestPattern::builder()
+                        .request_stage(fetch::RequestStage::Response)
+                        .resource_type(network::ResourceType::Document)
+                        .build(),
+                )
+                .build(),
+            Some(session_id),
+        )
+        .context("failed enabling request interception")?;
+
+    let events = connection.events.subscribe::<fetch::EventRequestPaused>();
+
+    let session_id = session_id.clone();
+    let cleanup_connection = connection.clone();
+    let cleanup_session_id = session_id.clone();
+    let (error_tx, error_rx) = mpmc::bounded(1);
+    let worker = thread::spawn(move || -> Result<()> {
+        let intercept = |event: &fetch::EventRequestPaused| -> Result<()> {
+            // Any non-200 upstream response is forwarded as-is.
+            if let Some(status) = event.response_status_code
+                && status != 200
+            {
+                return connection
+                    .send(
+                        fetch::ContinueRequestParams::builder()
+                            .request_id(event.request_id.clone())
+                            .build()
+                            .map_err(|error| {
+                                anyhow!(
+                                    "failed building ContinueRequestParams: {}",
+                                    error
+                                )
+                            })?,
+                        Some(&session_id),
+                    )
+                    .map(|_| ())
+                    .context("failed continuing request");
+            }
+
+            let headers: HashMap<String, String> =
+                json::from_value(event.request.headers.inner().clone())?;
+
+            let body_response = connection
+                .send(
+                    fetch::GetResponseBodyParams::builder()
+                        .request_id(event.request_id.clone())
+                        .build()
+                        .map_err(|error| {
+                            anyhow!(
+                                "failed building GetResponseBodyParams: {}",
+                                error
+                            )
+                        })?,
+                    Some(&session_id),
+                )
+                .context("failed getting response body")?;
+
+            let body = if body_response.base64_encoded {
+                let bytes = body_response.body.as_bytes();
+                String::from_utf8(BASE64_STANDARD.decode(bytes)?)?
+            } else {
+                body_response.body.clone()
+            };
+
+            let source_id = blocks.source_id(
+                &Url::parse(&event.request.url)
+                    .context("request URL does not parse")?,
+                &origin,
+            );
+            let etag = content_etag(headers, &body);
+
+            let is_html_document = event.resource_type
+                == network::ResourceType::Document
+                && event
+                    .response_headers
+                    .as_ref()
+                    .and_then(|headers| {
+                        headers.iter().find(|h| {
+                            h.name.eq_ignore_ascii_case("content-type")
+                        })
+                    })
+                    .map(|h| h.value.starts_with("text/html"))
+                    .unwrap_or_else(|| !body.trim_start().starts_with("<?xml"));
+
+            let body_instrumented = if event.resource_type
+                == network::ResourceType::Script
+            {
+                if !config.instrument_files {
+                    log::debug!(
+                        "skipping script file (disabled): {}",
+                        event.request.url
+                    );
+                    body.clone()
+                } else {
+                    let instrumented =
+                        instrumentation::js::instrument_source_code(
+                            source_id,
+                            &body,
+                            // As we can't know if the script is an ES module or a regular script,
+                            // we use this source type to let the parser decide.
+                            SourceType::unambiguous(),
+                        )?;
+                    blocks.register(instrumented.blocks);
+                    instrumented.text
+                }
+            } else if is_html_document {
+                if config.instrument_inline {
+                    let instrumented =
+                        instrumentation::html::instrument_inline_scripts(
+                            source_id, &body,
+                        )?;
+                    blocks.register(instrumented.blocks);
+                    instrumented.text
+                } else {
+                    log::debug!("skipping inline scripts (disabled)");
+                    body.clone()
+                }
+            } else if event.resource_type == network::ResourceType::Document {
+                // Non-HTML documents (XML, PDF, etc.) are passed
+                // through without instrumentation.
+                body.clone()
+            } else {
+                bail!(
+                    "should only intercept script and document resources, but got {:?}",
+                    event.resource_type
+                );
+            };
+
+            // Exclude headers that are invalidated by instrumentation
+            // or connection-specific (hop-by-hop headers per HTTP
+            // specification)
+            let excluded_headers = [
+                "content-length",
+                "content-encoding",
+                "transfer-encoding",
+                "content-md5",
+                "digest",
+                "content-range",
+                "connection",
+                "keep-alive",
+                "proxy-authenticate",
+                "proxy-authorization",
+                "te",
+                "trailer",
+                "upgrade",
+                "etag",
+            ];
+
+            let mut builder = fetch::FulfillRequestParams::builder()
+                .request_id(event.request_id.clone())
+                .body(BASE64_STANDARD.encode(body_instrumented))
+                .response_code(200)
+                .response_header(fetch::HeaderEntry {
+                    name: "etag".to_string(),
+                    value: etag,
+                });
+
+            if let Some(headers) = &event.response_headers {
+                for header in headers {
+                    let name_lower = header.name.to_lowercase();
+                    if !excluded_headers.contains(&name_lower.as_str()) {
+                        builder = builder.response_header(fetch::HeaderEntry {
+                            name: header.name.clone(),
+                            value: header.value.clone(),
+                        });
+                    }
+                }
+            }
+
+            connection
+                .send(
+                    builder.build().map_err(|error| {
+                        anyhow!(
+                            "failed building FulfillRequestParams: {}",
+                            error
+                        )
+                    })?,
+                    Some(&session_id),
+                )
+                .context("failed fulfilling request")?;
+            log::debug!(
+                "intercepted and instrumented request: {}",
+                event.request.url
+            );
+            Ok(())
+        };
+
+        while let Some(event) = events.next()? {
+            if let Err(error) = intercept(&event) {
+                let error_debug = format!("{error:?}");
+                if error_debug.contains("Invalid InterceptionId") {
+                    log::debug!(
+                        "interception invalidated (likely due to navigation): {}",
+                        event.request.url
+                    );
+                    continue;
+                }
+
+                log::warn!("failed to instrument requested script: {error}");
+                if let Err(error) = {
+                    let params = fetch::ContinueRequestParams::builder()
+                        .request_id(event.request_id.clone())
+                        .build()
+                        .map_err(|error| anyhow!("{error}"))?;
+                    connection
+                        .send(params, Some(&session_id))
+                        .map(|_| ())
+                        .map_err(|error| anyhow!("{error}"))
+                } {
+                    log::warn!(
+                        "failed continuing request after instrumentation failed: {error}"
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    });
+
+    thread::spawn(move || {
+        let error = match worker.join() {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) => format!("{error:#}"),
+            Err(_) => "worker panicked".to_string(),
+        };
+        log::error!("Fetch instrumentation worker failed: {error}");
+        let cleanup_error = cleanup_connection
+            .send(fetch::DisableParams::default(), Some(&cleanup_session_id))
+            .err()
+            .map(|error| {
+                log::error!(
+                    "disabling Fetch after worker failure failed: {error:#}"
+                );
+                format!("; disabling Fetch also failed: {error:#}")
+            })
+            .unwrap_or_default();
+        let _ = error_tx.send(anyhow!(
+            "Fetch instrumentation worker failed: {error}{cleanup_error}"
+        ));
+    });
+
+    Ok(error_rx)
+}
+
+/// A hash of the original ETag, or of the body when there is none, so the
+/// browser revalidates when content changes.
+fn content_etag(headers: HashMap<String, String>, body: &str) -> String {
+    let content = headers.get("etag").map_or(body, String::as_str);
+    format!("{}", stdx::hash::fnv1a64(content.bytes()))
+}

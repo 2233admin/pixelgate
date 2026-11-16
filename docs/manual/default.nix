@@ -1,0 +1,94 @@
+{
+  lib,
+  stdenvNoCC,
+  pandoc,
+  texlive,
+  ibm-plex,
+  gnumake,
+  esbuild,
+  python3,
+  npm-package,
+  typescript-reference,
+  cli-reference,
+}:
+let
+  version = (builtins.fromTOML (builtins.readFile ../../Cargo.toml)).workspace.package.version;
+
+  texliveBundle = texlive.combine {
+    inherit (texlive)
+      scheme-basic
+      lualatex-math
+      luatexbase
+      fontspec
+      unicode-math
+      amsmath
+      tools
+      sectsty
+      xcolor
+      hyperref
+      geometry
+      fancyvrb
+      booktabs
+      caption
+      fancyhdr
+      titling
+      parskip
+      listings
+      lm
+      tcolorbox
+      pgf
+      environ
+      etoolbox
+      mdwtools
+      fontawesome5
+      selnolig
+      ;
+  };
+in
+stdenvNoCC.mkDerivation {
+  pname = "bombadil-manual";
+  inherit version;
+
+  src = lib.cleanSourceWith {
+    src = ./.;
+    filter =
+      path: type:
+      (lib.hasSuffix ".md" path)
+      || (lib.hasSuffix ".yaml" path)
+      || (lib.hasSuffix ".html" path)
+      || (lib.hasSuffix ".css" path)
+      || (lib.hasSuffix ".js" path)
+      || (lib.hasSuffix ".lua" path)
+      || (lib.hasSuffix ".py" path)
+      || (baseNameOf path == "Makefile")
+      || (type == "directory");
+  };
+
+  nativeBuildInputs = [
+    pandoc
+    texliveBundle
+    gnumake
+    esbuild
+    (python3.withPackages (p: [ p.beautifulsoup4 ]))
+    typescript-reference
+    cli-reference
+  ];
+
+  OSFONTDIR = "${ibm-plex}/share/fonts/opentype";
+  NPM_PACKAGE = "${npm-package}";
+
+  buildPhase = ''
+    runHook preBuild
+    export HOME=$(mktemp -d)
+    make all VERSION=${version}
+    runHook postBuild
+  '';
+
+  installPhase = ''
+    runHook preInstall
+    mkdir -p $out
+    cp -r target/* $out/
+    rm -f $out/.built
+    runHook postInstall
+  '';
+}

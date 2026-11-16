@@ -1,0 +1,13 @@
+/target
+lib/bombadil/target
+lib/cdp/target
+.direnv
+/result
+.envrc.local
+/.vscode
+.claude
+AGENTS.md
+CLAUDE.md
+/chrome 
+.hegel
+.cache

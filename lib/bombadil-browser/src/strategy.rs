@@ -1,0 +1,263 @@
+use crate::browser::actions::BrowserActionTemplate;
+use crate::driver::BrowserSession;
+use crate::match_pattern::MatchPattern;
+use crate::url::parse_browser_url;
+use anyhow::{Result, bail};
+use bombadil::driver::RunState;
+use bombadil::model::{Picked, accepting_key};
+use bombadil::render::Formatted;
+use bombadil::runner::PropertiesState;
+use bombadil::styled;
+use bombadil::{
+    specification::domain::Snapshot,
+    tree::{Leaves, Tree},
+};
+use bombadil_schema::browser::Fingerprint;
+use rand::{RngExt, TryRng};
+use std::{collections::VecDeque, time::SystemTime};
+use url::Url;
+
+use crate::{
+    browser::{actions::BrowserAction, state::BrowserState},
+    convert::ToSchema,
+    runner::{ControlFlow, RunStrategy},
+};
+use bombadil_schema::markup;
+
+pub enum TestMode {
+    RandomWalk,
+    Reproduce(VecDeque<BrowserAction>),
+}
+
+pub struct TestStrategy<Rng> {
+    pub rng: Rng,
+    pub mode: TestMode,
+    pub exit_on_violation: bool,
+    pub test_start: Option<bombadil_schema::Time>,
+    pub deadline: Option<SystemTime>,
+    pub allow_urls: Vec<MatchPattern>,
+    pub violations_count: u64,
+    pub quiet: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ExitReason {
+    ExitOnViolation,
+    TimeLimit,
+    Stalled,
+    Interrupted,
+    Reproduced,
+    AllDefinite,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TestResult {
+    pub exit_reason: ExitReason,
+    pub violations_count: u64,
+}
+
+impl<Rng: TryRng + RngExt> TestStrategy<Rng> {
+    fn is_url_allowed(&self, url: &Url) -> bool {
+        self.allow_urls.iter().any(|pattern| pattern.matches(url))
+    }
+
+    fn exclude_disallowed_urls(
+        &self,
+        state: &BrowserState,
+        tree: Tree<BrowserActionTemplate>,
+    ) -> Tree<BrowserActionTemplate> {
+        if self.is_url_allowed(&state.url) {
+            // Preemptively drop clicks that'd take us to a disallowed URL.
+            tree.filter(&|a| match a {
+                BrowserAction::Click {
+                    fingerprint:
+                        Fingerprint {
+                            href: Some(href), ..
+                        },
+                    ..
+                }
+                | BrowserAction::DoubleClick {
+                    fingerprint:
+                        Fingerprint {
+                            href: Some(href), ..
+                        },
+                    ..
+                } => parse_browser_url(href, &state.url)
+                    .map(|url| self.is_url_allowed(&url))
+                    .unwrap_or(true),
+                _ => true,
+            })
+        } else {
+            // If we've already ended up at a disallowed URL, we force a
+            // backwards navigation if possible.
+            tree.filter(&|a| matches!(a, BrowserAction::Back))
+        }
+    }
+
+    fn pick_action(
+        &mut self,
+        leaves: &Leaves<'_, BrowserActionTemplate>,
+    ) -> Result<Picked<BrowserAction>> {
+        if leaves.as_slice().is_empty() {
+            bail!("no actions available");
+        }
+        match &mut self.mode {
+            TestMode::RandomWalk => {
+                Ok(Picked::generate(leaves.pick(&mut self.rng)?, &mut self.rng))
+            }
+            TestMode::Reproduce(actions_original) => {
+                if let Some(action_original) = actions_original.pop_front() {
+                    let available_actions = leaves.as_slice();
+                    if let Some(template) =
+                        accepting_key(leaves, &action_original)
+                    {
+                        Ok(Picked {
+                            action: action_original,
+                            template,
+                        })
+                    } else {
+                        println!(
+                            "\n{}\n\n{}\n\n{}\n\n{}\n",
+                            styled::maybe_red(styled::maybe_bold(
+                                "no match for original:".into()
+                            )),
+                            Formatted(&action_original),
+                            styled::maybe_red(styled::maybe_bold(
+                                "in the set of available actions:".into()
+                            )),
+                            available_actions
+                                .iter()
+                                .map(|(action, _)| format!(
+                                    "{}",
+                                    Formatted(*action)
+                                ))
+                                .collect::<Vec<String>>()
+                                .join("\n")
+                        );
+                        bail!("reproduction and original test diverged!");
+                    }
+                } else {
+                    bail!(
+                        "no remaining actions in prefix to apply (this is a bug)"
+                    )
+                }
+            }
+        }
+    }
+}
+
+impl<Rng: TryRng + RngExt> RunStrategy<BrowserSession> for TestStrategy<Rng> {
+    type StopValue = TestResult;
+
+    fn on_new_state(
+        &mut self,
+        state: &BrowserState,
+        leaves: &Leaves<'_, BrowserActionTemplate>,
+        _last_action: Option<&BrowserAction>,
+        _snapshots: &[Snapshot],
+        properties: PropertiesState<'_>,
+    ) -> anyhow::Result<ControlFlow<Self::StopValue, Picked<BrowserAction>>>
+    {
+        let test_start = *self.test_start.get_or_insert(
+            bombadil_schema::Time::from_system_time(state.timestamp),
+        );
+
+        self.violations_count += properties.violations.len() as u64;
+        if !self.quiet {
+            for violation in properties.violations {
+                log::info!("violation of property `{}`", violation.name);
+                let api_violation = violation.to_schema();
+                let markup = markup::render_violation(&api_violation);
+                let text = styled::markup_to_styled(&markup, test_start);
+                println!(
+                    "\n{}\n\n{}\n",
+                    styled::maybe_red(styled::maybe_bold(format!(
+                        "{} was violated:",
+                        violation.name
+                    ))),
+                    text
+                );
+            }
+        }
+
+        if self.violations_count > 0 && self.exit_on_violation {
+            return Ok(ControlFlow::Stop(TestResult {
+                exit_reason: ExitReason::ExitOnViolation,
+                violations_count: self.violations_count,
+            }));
+        }
+
+        if properties.all_definite {
+            log::info!("all properties are definite, stopping");
+            return Ok(ControlFlow::Stop(TestResult {
+                exit_reason: ExitReason::AllDefinite,
+                violations_count: self.violations_count,
+            }));
+        }
+
+        if let TestMode::Reproduce(browser_actions) = &self.mode
+            && browser_actions.is_empty()
+        {
+            return Ok(ControlFlow::Stop(TestResult {
+                exit_reason: ExitReason::Reproduced,
+                violations_count: self.violations_count,
+            }));
+        }
+
+        if let Some(deadline) = self.deadline()
+            && state.timestamp() >= deadline
+        {
+            log::info!("time limit reached, stopping");
+            return Ok(ControlFlow::Stop(TestResult {
+                exit_reason: ExitReason::TimeLimit,
+                violations_count: self.violations_count,
+            }));
+        }
+
+        let picked = self.pick_action(leaves)?;
+        let elapsed = std::time::Duration::from_micros(
+            state
+                .timestamp()
+                .as_micros()
+                .saturating_sub(test_start.as_micros()),
+        );
+        if !self.quiet {
+            println!("{} {}", Formatted(&elapsed), Formatted(&picked.action));
+        }
+
+        Ok(ControlFlow::Continue(picked))
+    }
+
+    fn deadline(&self) -> Option<bombadil_schema::Time> {
+        self.deadline.map(bombadil_schema::Time::from_system_time)
+    }
+
+    fn on_time_limit(&mut self) -> anyhow::Result<Self::StopValue> {
+        Ok(TestResult {
+            exit_reason: ExitReason::TimeLimit,
+            violations_count: self.violations_count,
+        })
+    }
+
+    fn on_stalled(&mut self) -> anyhow::Result<Self::StopValue> {
+        Ok(TestResult {
+            exit_reason: ExitReason::Stalled,
+            violations_count: self.violations_count,
+        })
+    }
+
+    fn constrain(
+        &self,
+        state: &BrowserState,
+        tree: Tree<BrowserActionTemplate>,
+    ) -> Tree<BrowserActionTemplate> {
+        self.exclude_disallowed_urls(state, tree)
+    }
+
+    fn on_interrupted(&mut self) -> anyhow::Result<Self::StopValue> {
+        Ok(TestResult {
+            exit_reason: ExitReason::Interrupted,
+            violations_count: self.violations_count,
+        })
+    }
+}
