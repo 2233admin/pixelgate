@@ -74,6 +74,9 @@ export interface CaptureResult {
   blocked?: string[];
 }
 
+/** `URL.hostname` keeps IPv6 brackets (`[::1]`); globs and reports use the bare address. */
+export const bareHost = (hostname: string) => hostname.replace(/^\[|\]$/g, '');
+
 /**
  * Hostname globs a run may load from: the configured ones plus the hosts of the snapshot
  * URLs themselves (the Vite server, `baseUrl`, Storybook), which only exist at run time.
@@ -82,7 +85,7 @@ export function allowList(allowedHostnames: string[], snaps: PageSnap[]): string
   const own = new Set<string>();
   for (const s of snaps) {
     try {
-      const host = new URL(s.url).hostname;
+      const host = bareHost(new URL(s.url).hostname);
       if (host) own.add(host);
     } catch {
       // Not a URL; navigation reports it.
@@ -101,8 +104,7 @@ export function isAllowed(url: string, allow: string[]): boolean {
     return true;
   }
   if (!/^(https?|wss?):$/.test(u.protocol)) return true;
-  // IPv6 hosts come back bracketed: `[::1]`.
-  return matchesAny(u.hostname.replace(/^\[|\]$/g, ''), allow);
+  return matchesAny(bareHost(u.hostname), allow);
 }
 
 async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise<void> {
@@ -193,7 +195,7 @@ async function newContext(browser: Browser, target: ResolvedTarget, allow: strin
       const req = route.request();
       if (isAllowed(req.url(), allow)) return route.continue();
       try {
-        blocked.get(req.frame().page())?.add(new URL(req.url()).hostname);
+        blocked.get(req.frame().page())?.add(bareHost(new URL(req.url()).hostname));
       } catch {
         // No frame (e.g. a worker): still blocked, just not attributed.
       }
@@ -226,6 +228,21 @@ export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], matcher
         page.on('pageerror', (e) => pageErrors.push(e.message));
         const hosts = new Set<string>();
         blocked.set(page, hosts);
+        // WebSockets bypass `context.route`; give them the same allowlist.
+        if (allow) {
+          await page.routeWebSocket(
+            () => true,
+            (ws) => {
+              if (isAllowed(ws.url(), allow)) return void ws.connectToServer();
+              try {
+                hosts.add(bareHost(new URL(ws.url()).hostname));
+              } catch {
+                // Unparseable URL: still closed.
+              }
+              return ws.close({ code: 1008, reason: 'blocked by pixelgate allowedHostnames' });
+            },
+          );
+        }
         const reference = await hooks.reference(target.dir, snap.name);
         const r: CaptureResult = { target: target.dir, name: snap.name, reference, pageErrors };
         try {

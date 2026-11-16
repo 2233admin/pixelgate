@@ -504,6 +504,12 @@ describe('mask and allowedHostnames helpers', () => {
     assert.equal(isAllowed('not a url', []), true);
   });
 
+  it('IPv6 snapshot hosts are allowed the way requests are checked (no brackets)', () => {
+    const allow = allowList([], [{ name: 'a', url: 'http://[::1]:5173/' }]);
+    assert.deepEqual(allow, ['::1']);
+    assert.equal(isAllowed('http://[::1]:5173/assets/app.js', allow), true);
+  });
+
   it('storybook mask reaches every story', () => {
     const [s] = storiesFromIndex({ entries: { a: { id: 'button--primary', type: 'story' } } } as never, {
       url: 'http://sb',

@@ -81,6 +81,8 @@ beforeAll(async () => {
       '/dynamic-plain': () => dynamic(''),
       '/dark': () => dark,
       '/external': external,
+      '/ws': () => `<!doctype html><body style="margin:0">
+<script>window.sock = new WebSocket('ws://localhost:${port}/sock');</script></body>`,
     };
     res.writeHead(200, { 'content-type': 'text/html' }).end((routes[req.url ?? ''] ?? home)());
   });
@@ -304,6 +306,11 @@ describe('determinism: hide, ignore, mask, allowedHostnames', () => {
     const r = await run(one('.pg-blocked', [{ name: 'p', url: `${origin}/external` }], { allowedHostnames: [] }));
     assert.deepEqual(r.results[0]!.blocked, ['localhost']);
     assert.notDeepEqual(rgbAt(await pixels('.pg-blocked', 'p'), 50, 50), [255, 0, 0], 'stylesheet blocked');
+  });
+
+  it('allowedHostnames also blocks WebSockets (they bypass request routing)', async () => {
+    const r = await run(one('.pg-ws', [{ name: 'p', url: `${origin}/ws` }], { allowedHostnames: [] }));
+    assert.deepEqual(r.results[0]!.blocked, ['localhost'], JSON.stringify(r.results));
   });
 });
 
