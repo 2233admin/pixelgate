@@ -16,7 +16,8 @@ import {
 import { isCI, parseViewport, resolveConfig } from '../src/config.js';
 import { resolveUrl, safeName } from '../src/names.js';
 import { determineOutcome, type OutcomeInput } from '../src/outcome.js';
-import { summarize } from '../src/report.js';
+import { buildReport, summarize, type Report, type SnapshotResult } from '../src/report.js';
+import { commentMarker, renderMarkdown } from '../src/markdown.js';
 import { storiesFromIndex } from '../src/storybook.js';
 import { esmEntry } from '../src/vite.js';
 import { pixelgateScreenshots, snapshotName } from '../src/vitest.js';
@@ -374,5 +375,66 @@ describe('misc', () => {
     const rs = [{ target: 't', name: 'a', status: 'added' as const }];
     assert.equal(summarize(rs, ['changed', 'error']).failed, false);
     assert.equal(summarize(rs, ['added']).failed, true);
+  });
+});
+
+describe('renderMarkdown (PR comment / job summary)', () => {
+  const report = (results: SnapshotResult[], failOn: Report['failOn'] = ['changed', 'error', 'added']): Report =>
+    buildReport(results, failOn);
+  const failing = () =>
+    report([
+      { target: 'desktop-linux', name: 'home', status: 'unchanged', baseline: 'baseline/desktop-linux/home.png' },
+      {
+        target: 'desktop-linux',
+        name: 'Card | dark',
+        status: 'changed',
+        baseline: 'baseline/desktop-linux/Card_dark.png',
+        current: 'current/desktop-linux/Card_dark.png',
+        diff: 'diff/desktop-linux/Card_dark.png',
+        diffRatio: 0.0123,
+      },
+      { target: 'desktop-linux', name: 'new page', status: 'added', current: 'current/desktop-linux/new_page.png' },
+      { target: 'desktop-linux', name: 'broken', status: 'error', error: 'Timeout 30000ms exceeded.\nCall log: ...' },
+    ]);
+
+  it('starts with the marker, names the outcome and lists only what needs a look', () => {
+    const md = renderMarkdown(failing(), { id: 'pixelgate-linux' });
+    const lines = md.split('\n');
+    assert.equal(lines[0], '<!-- pixelgate-linux -->');
+    assert.equal(lines[1], '### pixelgate: failed');
+    assert.match(md, /1 error, 1 changed, 1 added, 1 unchanged \(4 total\)\./);
+    assert.match(md, /\| changed \| `Card \\| dark` \| `desktop-linux` \| 1\.23% of pixels \|/);
+    assert.match(md, /\| error \| `broken` \| `desktop-linux` \| Timeout 30000ms exceeded\. \|/);
+    assert.doesNotMatch(md, /`home`/, 'unchanged snapshots are only counted');
+    assert.doesNotMatch(md, /<img/, 'no image base, no images');
+  });
+
+  it('with an image base: baseline/current/diff for changed, current for added, URL-encoded', () => {
+    const md = renderMarkdown(failing(), { imageBaseUrl: 'https://raw.example/o/r/sha/run 1/' });
+    assert.match(md, /<details open><summary>Screenshots<\/summary>/);
+    assert.match(md, /\| Baseline \| Current \| Diff \|/);
+    assert.ok(md.includes('src="https://raw.example/o/r/sha/run 1/diff/desktop-linux/Card_dark.png"'));
+    assert.ok(md.includes('src="https://raw.example/o/r/sha/run 1/current/desktop-linux/new_page.png"'));
+    assert.equal(md.match(/<img /g)!.length, 4);
+  });
+
+  it('accept command and links only when there is something to accept', () => {
+    const cmd = 'gh run download 1 -n pixelgate -D .pixelgate-ci && npx pixelgate approve --from .pixelgate-ci';
+    const md = renderMarkdown(failing(), { acceptCommand: cmd, reportUrl: 'https://r', runUrl: 'https://run' });
+    assert.ok(md.includes('```sh\n' + cmd + '\n```'));
+    assert.ok(md.includes('[Full report](https://r) · [CI run](https://run)'));
+    const passed = renderMarkdown(report([{ target: 't', name: 'a', status: 'unchanged' }]), { acceptCommand: cmd });
+    assert.match(passed, /### pixelgate: passed\n\n1 unchanged \(1 total\)\.\n$/);
+  });
+
+  it('caps long tables', () => {
+    const many = Array.from({ length: 7 }, (_, i) => ({ target: 't', name: `p${i}`, status: 'added' as const }));
+    const md = renderMarkdown(report(many), { maxRows: 5 });
+    assert.equal(md.match(/^\| added \|/gm)!.length, 5);
+    assert.match(md, /…and 2 more in the full report\./);
+  });
+
+  it('marker cannot be closed early by the id', () => {
+    assert.equal(commentMarker('a-->b'), '<!-- ab -->');
   });
 });

@@ -1,10 +1,11 @@
 node_modules/
 dist/
-.pixelgate/current/
-.pixelgate/diff/
-.pixelgate/report/
+**/.pixelgate/current/
+**/.pixelgate/diff/
+**/.pixelgate/report/
 test/.tmp/
-test/fixtures/**/.pixelgate/
+# The vitest e2e test writes here; vite-app keeps the visual workflow's baselines.
+test/fixtures/vitest-app/.pixelgate/
 test/fixtures/**/dist/
 .vitest/
 *.timestamp-*.mjs

@@ -84,30 +84,50 @@ export interface ApproveOptions {
   only?: string[];
   /** Also delete baselines reported as `removed`. */
   prune?: boolean;
+  /**
+   * Out dir of another run to approve from, e.g. a CI artifact downloaded with
+   * `gh run download`: its report and screenshots are read, baselines are written
+   * to `o`. This is how a Windows/macOS machine accepts Linux CI baselines.
+   */
+  from?: string;
+}
+
+/** `rel` resolved under `dir`; throws if it points outside (the report may come from a download). */
+function inside(dir: string, rel: string): string {
+  const abs = path.resolve(dir, rel);
+  const back = path.relative(dir, abs);
+  if (!back || back.startsWith('..') || path.isAbsolute(back)) throw new Error(`Report path escapes ${dir}: ${rel}`);
+  return abs;
 }
 
 /** Promote current screenshots to baseline for changed/added snapshots in the last report. */
 export async function approve(o: OutDir, opts: ApproveOptions = {}): Promise<SnapshotResult[]> {
-  const report = await readReport(o);
+  const source: OutDir = opts.from ? { outDir: path.resolve(opts.from) } : o;
+  const report = await readReport(source);
   const done: SnapshotResult[] = [];
   for (const r of report.results) {
     if (opts.only?.length && !matchesAny(r.name, opts.only)) continue;
-    if (r.status === 'changed' || r.status === 'added') {
+    const take = r.status === 'changed' || r.status === 'added' || (opts.from !== undefined && r.status === 'updated');
+    if (take) {
       // Paths come from the report, so the file format (png/jpg/...) is whatever the run wrote.
-      // Mode `new` and Vitest write a brand-new reference straight to baseline; nothing to copy then.
-      const src = r.current && path.join(o.outDir, r.current);
+      // Mode `new` and Vitest write a brand-new reference straight to baseline; in place there is
+      // nothing to copy then, but from another run that baseline is the screenshot to take.
+      const srcRel = r.current ?? (opts.from ? r.baseline : undefined);
+      const src = srcRel && inside(source.outDir, srcRel);
       if (src && existsSync(src)) {
-        const dest = path.join(o.outDir, 'baseline', r.target, path.basename(src));
+        const dest = inside(o.outDir, path.join('baseline', r.target, path.basename(src)));
         await mkdir(path.dirname(dest), { recursive: true });
         await copyFile(src, dest);
         r.baseline = rel(o, dest);
       }
       done.push(r);
     } else if (r.status === 'removed' && opts.prune && r.baseline) {
-      await unlink(path.join(o.outDir, r.baseline)).catch(() => {});
+      await unlink(inside(o.outDir, r.baseline)).catch(() => {});
       done.push(r);
     }
   }
+  // The source report belongs to the other run; leave it as downloaded.
+  if (opts.from) return done;
   // Reflect the approval in the report so a re-opened review page is not stale.
   const key = (r: SnapshotResult) => `${r.target}\0${r.name}`;
   const approved = new Set(done.map(key));

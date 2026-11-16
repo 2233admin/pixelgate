@@ -1,0 +1,51 @@
+name: visual
+
+# Dogfood: the pixelgate GitHub Action (action.yml at the repo root) gating the demo app in
+# test/fixtures/vite-app. Baselines are in test/fixtures/vite-app/.pixelgate/baseline/.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # push screenshots to the pixelgate-images branch
+  pull-requests: write # comment on the pull request
+
+concurrency:
+  group: visual-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  visual:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          package-manager-cache: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+          cache: true
+
+      # `prepare` builds dist/, which the action calls below.
+      - run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - run: pnpm exec playwright install --with-deps chromium-headless-shell
+
+      - uses: ./
+        with:
+          working-directory: test/fixtures/vite-app
+          # A consumer project would keep the default, `npx --no pixelgate`.
+          command: node ../../../dist/cli.js
+          images-branch: pixelgate-images
