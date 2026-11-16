@@ -330,8 +330,8 @@ baseline once.
 
 **Blocking requests.** Anything loaded from a third party (fonts, scripts,
 images, analytics) changes when that third party does and fails when it is
-down. `allowedHostnames` blocks every request to a hostname that matches none
-of its globs before it leaves the browser:
+down. `allowedHostnames` blocks every request and WebSocket to a hostname that
+matches none of its globs before it leaves the browser:
 
 ```ts
 export default defineConfig({
