@@ -54,6 +54,10 @@ export interface SnapshotResult {
   pageErrors?: string[];
   /** Hostnames `allowedHostnames` blocked while rendering (why an asset may be missing). */
   blocked?: string[];
+  /** Full size of a screenshot that `maxHeight`/`maxWidth` cut off (CSS px). */
+  capped?: { width: number; height: number };
+  /** Stylesheets `applyPseudoClasses` could not read, so their `:hover` etc. rules were not forced. */
+  unreadableStylesheets?: string[];
   /** axe-core violations (`checks.a11y`). */
   a11y?: A11yViolation[];
   /** CSS pixels the page reaches past the right edge of the viewport (`checks.overflow`). */

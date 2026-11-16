@@ -6,7 +6,7 @@ import path from 'node:path';
 import { encode as encodePng } from 'fast-png';
 import { describe, it } from 'vitest';
 import { ariaResult, determineAriaOutcome, normalizeAria, patchDelta, withAria } from '../src/aria.js';
-import { allowList, isAllowed, maskSelectors, stableShot } from '../src/capture.js';
+import { allowList, capBox, isAllowed, maskSelectors, stableShot } from '../src/capture.js';
 import {
   compareImages,
   createMatcher,
@@ -675,5 +675,39 @@ describe('approve keeps a removed ARIA baseline reported until it is pruned', ()
     } finally {
       await rm(outDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('size caps', () => {
+  it('capBox cuts to the caps and reports the full size; 0 means no cap', () => {
+    const box = { x: 0, y: 0, width: 400, height: 8000 };
+    assert.deepEqual(capBox(box, 0, 5000), { clip: { ...box, height: 5000 }, capped: { width: 400, height: 8000 } });
+    assert.deepEqual(capBox(box, 0, 0), { clip: box });
+    assert.deepEqual(capBox(box, 300, 9000), { clip: { ...box, width: 300 }, capped: { width: 400, height: 8000 } });
+  });
+
+  it('maxHeight defaults to 5000 like Happo; targets override; bad values throw', () => {
+    const base = { pages: [{ name: 'p', url: 'http://x/' }] };
+    const cfg = resolveConfig({ ...base, targets: { a: {}, b: { maxHeight: 0, maxWidth: 1200 } } }, '/tmp');
+    assert.deepEqual(cfg.targets.map((t) => [t.maxHeight, t.maxWidth]), [[5000, 0], [0, 1200]]);
+    assert.equal(resolveConfig({ ...base, maxHeight: 2000 }, '/tmp').targets[0]!.maxHeight, 2000);
+    assert.deepEqual([cfg.includeOutlinesAndShadows, cfg.applyPseudoClasses], [false, false]);
+    assert.throws(() => resolveConfig({ ...base, maxHeight: -1 }, '/tmp'), /maxHeight/);
+    assert.throws(() => resolveConfig({ ...base, targets: { a: { maxWidth: 10.5 } } }, '/tmp'), /Target "a".*maxWidth/);
+    assert.throws(() => resolveConfig({ pages: [{ name: 'p', url: 'http://x/', maxHeight: -5 }] }, '/tmp'), /Page "p".*maxHeight/);
+  });
+
+  it('markdown notes a cut or pseudo-class problem on any snapshot, unchanged ones too', () => {
+    const report = buildReport(
+      [
+        { target: 't', name: 'long', status: 'unchanged', capped: { width: 400, height: 8000 } },
+        { target: 't', name: 'menu', status: 'unchanged', unreadableStylesheets: ['https://cdn.example/a.css'] },
+      ],
+      ['changed'],
+    );
+    const md = renderMarkdown(report);
+    assert.match(md, /#### Notes/);
+    assert.match(md, /\| cut at the size cap \| `long` \| `t` \| full 400x8000px, compared up to the cap \|/);
+    assert.match(md, /\| pseudo-classes not forced \| `menu` \| `t` \| unreadable: `https:\/\/cdn\.example\/a\.css` \|/);
   });
 });

@@ -80,6 +80,8 @@ async function runAgainst(cfg: ResolvedConfig, opts: RunOptions, baseUrl: string
       });
       if (c.pageErrors.length) r.pageErrors = c.pageErrors;
       if (c.blocked?.length) r.blocked = c.blocked;
+      if (c.capped) r.capped = c.capped;
+      if (c.unreadableStylesheets?.length) r.unreadableStylesheets = c.unreadableStylesheets;
       if (c.a11y?.length) r.a11y = c.a11y;
       if (c.overflowPx) r.overflowPx = c.overflowPx;
       // A failed capture proves nothing about its ARIA baseline: neither compared nor orphaned.

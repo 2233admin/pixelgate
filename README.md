@@ -351,6 +351,49 @@ In Vitest browser mode, Vitest takes the screenshots, so these options do not
 apply there. With the Playwright provider, `toMatchScreenshot`'s
 `screenshotOptions` take Playwright's own `mask` and `style`.
 
+## Size caps, outlines and pseudo-classes
+
+```ts
+export default defineConfig({
+  maxHeight: 5000, // default; 0 = no cap. Also maxWidth. Per target and per page too.
+  includeOutlinesAndShadows: true, // selector crops keep focus rings and box-shadows
+  applyPseudoClasses: true, // data-pixelgate-hover / -focus / -focus-visible / -active
+});
+```
+
+- **`maxHeight` / `maxWidth`** (Happo's, default 5000px tall, no width cap):
+  a longer page or element is cut off at the cap, and the result says how big
+  it was (`capped`, shown in the report, the comment and the CLI). Screenshots
+  under the cap are taken exactly as before. A viewport screenshot
+  (`fullPage: false`) is never cut.
+- **`includeOutlinesAndShadows`**: a `selector` crop normally stops at the
+  element's border box and cuts off its focus ring or shadow. With this on it
+  grows to cover the outlines and outer box-shadows of the element and its
+  descendants (e.g. a button inside `#storybook-root`), scaled with their CSS
+  transforms. Global, per Storybook source, per page. `filter: drop-shadow` is
+  not measured.
+- **`applyPseudoClasses`**: mark elements to show a state without moving the
+  mouse, several at once:
+
+  ```html
+  <button data-pixelgate-hover>Save</button>
+  <a href="#" data-pixelgate-focus-visible>Docs</a>
+  ```
+
+  pixelgate rewrites every CSS rule that uses `:hover`, `:focus`,
+  `:focus-visible` or `:active`: `:hover` becomes
+  `:is(:hover, [data-pixelgate-hover])`, with the same specificity, so
+  `:not(:hover)` rules and nested rules follow too (inside `@media`,
+  `@supports`, `@layer`, nesting, `@import` and open shadow roots as well).
+  It works in every browser. Stylesheets from another origin cannot
+  be read; they are listed in the result (`unreadableStylesheets`). The
+  browser's own default focus ring is not a CSS rule: for that, focus the
+  element in `beforeCapture`.
+
+Grown crops and capped screenshots are clips of the full page: unlike a plain
+element screenshot they do not scroll the element into view first, so sticky
+headers and lazy content render as they do at the top of the page.
+
 ## Checks: accessibility, overflow, page errors
 
 Some problems need no baseline to be problems. pixelgate can check every
