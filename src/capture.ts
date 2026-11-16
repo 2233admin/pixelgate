@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium, firefox, webkit, type BrowserType, type Page } from 'playwright';
 import type { PageSnap, ResolvedConfig, ResolvedTarget } from './config.js';
+import { safeName } from './names.js';
 
 const ENGINES: Record<ResolvedTarget['browser'], BrowserType> = { chromium, firefox, webkit };
 
@@ -24,10 +25,7 @@ export interface CaptureResult {
   pageErrors: string[];
 }
 
-/** Snapshot file name: readable and filesystem-safe. */
-export function safeName(name: string): string {
-  return name.replace(/[^a-zA-Z0-9._-]+/g, '_').replace(/^_+|_+$/g, '') || 'snapshot';
-}
+export { safeName };
 
 async function captureOne(page: Page, snap: PageSnap, cfg: ResolvedConfig, file: string): Promise<void> {
   const { stabilize, timeoutMs } = cfg;

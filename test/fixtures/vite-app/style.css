@@ -1,0 +1,16 @@
+body {
+  margin: 0;
+  font-family: sans-serif;
+}
+.card {
+  width: 280px;
+  margin: 24px;
+  padding: 16px;
+  border: 1px solid #ddd;
+}
+.cta {
+  background: #2563eb;
+  color: #fff;
+  border: 0;
+  padding: 10px 16px;
+}

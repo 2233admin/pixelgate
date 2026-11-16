@@ -4,3 +4,7 @@ dist/
 .pixelgate/diff/
 .pixelgate/report/
 test/.tmp/
+test/fixtures/**/.pixelgate/
+test/fixtures/**/dist/
+test/fixtures/**/.vitest-attachments/
+*.timestamp-*.mjs

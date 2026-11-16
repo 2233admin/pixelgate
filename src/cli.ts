@@ -1,19 +1,22 @@
 #!/usr/bin/env node
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { loadConfig } from './config.js';
-import { approve, reportDir, run } from './run.js';
+import { findConfigFile, loadConfig } from './config.js';
+import { approve, reportDir, type OutDir } from './report.js';
+import { run } from './run.js';
 
 const HELP = `pixelgate - visual regression gate
 
 Usage:
   pixelgate run      [--config <file>] [--only <glob>]... [--json]
-  pixelgate approve  [--config <file>] [--only <glob>]... [--prune]
+  pixelgate approve  [--config <file> | --out-dir <dir>] [--only <glob>]... [--prune]
 
 run      Capture every snapshot, diff against baseline, write <outDir>/report/.
          Exit 0 = pass, 1 = statuses in \`failOn\` present, 2 = usage/config error.
 approve  Promote current screenshots of changed/added snapshots (from the last
-         run) to baseline. --prune also deletes baselines reported as removed.
+         run, or the last Vitest run with PixelgateReporter) to baseline.
+         --prune also deletes baselines reported as removed.
+         Without a pixelgate config, uses --out-dir (default .pixelgate).
 
 --json   Print the report JSON to stdout (progress goes to stderr).`;
 
@@ -26,6 +29,7 @@ async function main(argv: string[]): Promise<number> {
       only: { type: 'string', multiple: true },
       json: { type: 'boolean' },
       prune: { type: 'boolean' },
+      'out-dir': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -34,12 +38,14 @@ async function main(argv: string[]): Promise<number> {
     console.log(HELP);
     return cmd || values.help ? 0 : 2;
   }
-  const cfg = await loadConfig(process.cwd(), values.config);
+  const cwd = process.cwd();
   const log = (msg: string) => process.stderr.write(msg + '\n');
 
   if (cmd === 'run') {
+    const cfg = await loadConfig(cwd, values.config);
     const report = await run(cfg, {
       only: values.only,
+      onServer: (url) => log(`vite: ${url}`),
       onProgress: (r) => log(`${r.error ? 'x' : '.'} ${r.target} ${r.name}${r.error ? `  ${r.error}` : ''}`),
     });
     const s = report.summary;
@@ -51,7 +57,11 @@ async function main(argv: string[]): Promise<number> {
     return report.failed ? 1 : 0;
   }
   if (cmd === 'approve') {
-    const done = await approve(cfg, { only: values.only, prune: values.prune });
+    const target: OutDir =
+      values.config || (!values['out-dir'] && findConfigFile(cwd))
+        ? await loadConfig(cwd, values.config)
+        : { outDir: path.resolve(cwd, values['out-dir'] ?? '.pixelgate') };
+    const done = await approve(target, { only: values.only, prune: values.prune });
     for (const r of done) log(`approved ${r.status} ${r.target} ${r.name}`);
     log(`${done.length} snapshot(s) approved`);
     return 0;

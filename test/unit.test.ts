@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import { PNG } from 'pngjs';
 import { describe, it } from 'vitest';
 import { compareImages } from '../src/compare.js';
 import { parseViewport, resolveConfig } from '../src/config.js';
-import { safeName } from '../src/capture.js';
+import { resolveUrl, safeName } from '../src/names.js';
+import { summarize } from '../src/report.js';
 import { storiesFromIndex } from '../src/storybook.js';
-import { summarize } from '../src/run.js';
+import { pixelgateScreenshots, snapshotName } from '../src/vitest.js';
 
 function png(width: number, height: number, paint: (x: number, y: number) => [number, number, number]): Buffer {
   const img = new PNG({ width, height });
@@ -77,9 +79,33 @@ describe('storybook', () => {
   });
 });
 
+describe('vitest path mapping', () => {
+  const root = path.resolve('/proj');
+  const data = { root, ext: '.png', browserName: 'chromium', testFileDirectory: 'src/ui', testFileName: 'Button.test.tsx' };
+  const p = pixelgateScreenshots();
+  const out = (...s: string[]) => path.join(root, '.pixelgate', ...s);
+  it('names snapshots by test file + arg', () => {
+    assert.equal(snapshotName(data, 'primary'), 'src/ui/Button.test.tsx/primary');
+    assert.equal(snapshotName({ testFileDirectory: '.', testFileName: 'a.test.ts' }, 'x'), 'a.test.ts/x');
+  });
+  it('maps reference/actual/diff into the pixelgate layout', () => {
+    const f = 'src_ui_Button.test.tsx_primary.png';
+    assert.equal(p.resolveScreenshotPath({ ...data, arg: 'primary' }), out('baseline', 'chromium', f));
+    assert.equal(p.resolveDiffPath({ ...data, arg: 'primary-actual' }), out('current', 'chromium', f));
+    assert.equal(p.resolveDiffPath({ ...data, arg: 'primary-reference' }), out('current', 'chromium', f));
+    assert.equal(p.resolveDiffPath({ ...data, arg: 'primary-diff' }), out('diff', 'chromium', f));
+  });
+});
+
 describe('misc', () => {
   it('safeName is filesystem safe', () => {
     assert.equal(safeName('Header / dark mode?'), 'Header_dark_mode');
+  });
+  it('resolveUrl keeps absolute URLs and the base path', () => {
+    assert.equal(resolveUrl('file:///x.html', undefined), 'file:///x.html');
+    assert.equal(resolveUrl('/settings', 'http://h:5173/app/'), 'http://h:5173/app/settings');
+    assert.equal(resolveUrl('/', 'http://h:5173/app'), 'http://h:5173/app/');
+    assert.throws(() => resolveUrl('/x', undefined), /relative/);
   });
   it('summarize honours failOn', () => {
     const rs = [{ target: 't', name: 'a', status: 'added' as const }];

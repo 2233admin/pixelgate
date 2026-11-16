@@ -1,0 +1,11 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # Policy: stay on the latest release of everything, majors included.
+    versioning-strategy: increase
+    groups:
+      all:
+        patterns: ['*']

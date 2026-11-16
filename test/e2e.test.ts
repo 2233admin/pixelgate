@@ -7,7 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, it } from 'vitest';
 import { resolveConfig, type ResolvedConfig } from '../src/config.js';
-import { approve, run } from '../src/run.js';
+import { approve } from '../src/report.js';
+import { run } from '../src/run.js';
 
 // The page under test; tests mutate it to simulate a code change.
 let buttonColor = '#2563eb';

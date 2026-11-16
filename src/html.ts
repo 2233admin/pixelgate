@@ -1,4 +1,4 @@
-import type { Report } from './run.js';
+import type { Report } from './report.js';
 
 /** Self-contained review page. Images load by relative path from `<outDir>/report/`. */
 export function renderHtml(report: Report): string {

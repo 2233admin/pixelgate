@@ -36,6 +36,27 @@ export interface StorybookSource {
   selector?: string;
 }
 
+export interface ViteSource {
+  /** `dev` runs the dev server; `preview` serves the production build. Default `dev`. */
+  mode?: 'dev' | 'preview';
+  /** Run `vite build` before `preview`. Default true. */
+  build?: boolean;
+  /** Vite project root, relative to the pixelgate config file. Default: the config file's directory. */
+  root?: string;
+  /** Vite config file, relative to `root`. Default: Vite's own lookup. */
+  configFile?: string;
+  /** Fixed port. Default: Vite's default, next free port if taken. */
+  port?: number;
+}
+
+export interface ResolvedViteSource {
+  mode: 'dev' | 'preview';
+  build: boolean;
+  root: string;
+  configFile?: string;
+  port?: number;
+}
+
 export interface Stabilize {
   /** Extra CSS injected before capture (e.g. hide clocks, ads). */
   css?: string;
@@ -47,8 +68,13 @@ export interface Stabilize {
 
 export interface Config {
   targets?: Record<string, Target>;
+  /** Pages to capture. Relative URLs (`/settings`) resolve against the Vite server or `baseUrl`. */
   pages?: PageSnap[];
   storybook?: StorybookSource;
+  /** Start the project's Vite server for the run and point relative page URLs at it. */
+  vite?: ViteSource;
+  /** Base for relative page URLs when not using `vite`, e.g. `http://localhost:3000`. */
+  baseUrl?: string;
   /** Working directory for baseline/current/diff/report. Default `.pixelgate`. */
   outDir?: string;
   /** Per-pixel color distance tolerance, 0..1 (pixelmatch). Default 0.1. */
@@ -78,6 +104,8 @@ export interface ResolvedConfig {
   targets: ResolvedTarget[];
   pages: PageSnap[];
   storybook?: StorybookSource;
+  vite?: ResolvedViteSource;
+  baseUrl?: string;
   threshold: number;
   maxDiffPixelRatio: number;
   concurrency: number;
@@ -130,6 +158,9 @@ export function resolveConfig(config: Config, rootDir: string): ResolvedConfig {
   if (pages.length === 0 && !config.storybook) {
     throw new Error('Config must define `pages` or `storybook`');
   }
+  if (config.vite?.mode && !['dev', 'preview'].includes(config.vite.mode)) {
+    throw new Error('`vite.mode` must be "dev" or "preview"');
+  }
 
   const threshold = config.threshold ?? 0.1;
   if (threshold < 0 || threshold > 1) throw new Error('`threshold` must be within 0..1');
@@ -140,6 +171,14 @@ export function resolveConfig(config: Config, rootDir: string): ResolvedConfig {
     targets,
     pages,
     storybook: config.storybook,
+    vite: config.vite && {
+      mode: config.vite.mode ?? 'dev',
+      build: config.vite.build ?? true,
+      root: path.resolve(rootDir, config.vite.root ?? '.'),
+      configFile: config.vite.configFile,
+      port: config.vite.port,
+    },
+    baseUrl: config.baseUrl,
     threshold,
     maxDiffPixelRatio: config.maxDiffPixelRatio ?? 0,
     concurrency: Math.max(1, config.concurrency ?? 4),
@@ -150,10 +189,12 @@ export function resolveConfig(config: Config, rootDir: string): ResolvedConfig {
 }
 
 /** Find and load a config file. Node >=22.18 imports `.ts` configs natively (type stripping). */
+export function findConfigFile(cwd: string): string | undefined {
+  return CONFIG_FILES.map((f) => path.join(cwd, f)).find((f) => existsSync(f));
+}
+
 export async function loadConfig(cwd: string, explicit?: string): Promise<ResolvedConfig> {
-  const file = explicit
-    ? path.resolve(cwd, explicit)
-    : CONFIG_FILES.map((f) => path.join(cwd, f)).find((f) => existsSync(f));
+  const file = explicit ? path.resolve(cwd, explicit) : findConfigFile(cwd);
   if (!file || !existsSync(file)) {
     throw new Error(`No config found. Create one of: ${CONFIG_FILES.join(', ')}`);
   }

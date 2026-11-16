@@ -20,9 +20,13 @@ baselines live in your repo, the report is a folder of PNGs plus one HTML file.
 ## Install
 
 ```bash
-pnpm add -D pixelgate
+pnpm add -D pixelgate playwright
 pnpm exec playwright install chromium   # plus firefox / webkit if you target them
 ```
+
+`playwright` is a peer dependency: pixelgate drives your project's Playwright,
+so `playwright install` always fetches the browser build that version expects.
+`vite` and `vitest` are optional peers, used only by the adapters below.
 
 Node 22.18 or newer (so `pixelgate.config.ts` loads without a build step).
 
@@ -100,6 +104,73 @@ Add to `.gitignore`:
 .pixelgate/report/
 ```
 
+## Vite
+
+Let pixelgate start your Vite app for the run; page URLs become relative:
+
+```ts
+export default defineConfig({
+  vite: { mode: 'dev' },          // or 'preview' (runs `vite build` first unless build: false)
+  pages: [
+    { name: 'home', url: '/' },
+    { name: 'settings', url: '/settings', selector: 'main' },
+  ],
+});
+```
+
+pixelgate loads the project's own `vite` package, starts the server on
+`127.0.0.1` (HMR off), resolves relative URLs against it (your `base`, e.g.
+`/app/`, is kept), and closes it when the run ends. Options: `root`,
+`configFile`, `port`, `build`. Not on Vite? Run your server yourself and set
+`baseUrl: 'http://localhost:3000'`.
+
+## Vitest browser mode
+
+Already writing component tests with Vitest browser mode and
+`toMatchScreenshot`? Keep them. pixelgate only routes the files into its
+layout and writes the review page, so `pixelgate approve` and the HTML report
+work the same for both:
+
+```ts
+// vitest.config.ts
+import { playwright } from '@vitest/browser-playwright';
+import { PixelgateReporter, pixelgateScreenshots } from 'pixelgate/vitest';
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    reporters: ['default', new PixelgateReporter()],
+    browser: {
+      enabled: true,
+      provider: playwright(),
+      instances: [{ browser: 'chromium' }],
+      expect: { toMatchScreenshot: pixelgateScreenshots() },
+    },
+  },
+});
+```
+
+```ts
+// Button.browser.test.ts
+import { expect, test } from 'vitest';
+import { page } from 'vitest/browser';
+
+test('primary button', async () => {
+  render(<Button variant="primary">Save</Button>);
+  await expect(page.getByRole('button')).toMatchScreenshot('primary');
+});
+```
+
+- Reference: `.pixelgate/baseline/<browser>/<test-file>_<name>.png`
+- On a mismatch Vitest fails the test; the new screenshot goes to
+  `.pixelgate/current/`, the diff to `.pixelgate/diff/`.
+- After each run the reporter writes `.pixelgate/report/`. Review it, then
+  `pixelgate approve` (no pixelgate config needed; `--out-dir` if you moved it),
+  or `vitest -u` to accept everything.
+
+Comparison, retries and thresholds stay Vitest's (`comparatorName`,
+`comparatorOptions` in the same `toMatchScreenshot` block).
+
 ## Stable screenshots
 
 Before every capture pixelgate:
@@ -136,6 +207,19 @@ const cfg = await loadConfig(process.cwd());
 const report = await run(cfg, { only: ['home'] });
 if (report.failed) console.log(report.results.filter((r) => r.status === 'changed'));
 ```
+
+## Development
+
+```bash
+pnpm install
+pnpm exec playwright install chromium-headless-shell
+pnpm test            # builds dist first; e2e runs real Chromium, a Vite app and a Vitest browser project
+pnpm deps:check      # exits non-zero if any dependency is behind latest
+pnpm deps:latest     # move everything to latest
+```
+
+Dependency policy: always on the latest release of every dependency. Dependabot
+opens the bumps weekly; `deps:check` must be clean before a release.
 
 ## Roadmap
 
