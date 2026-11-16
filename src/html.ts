@@ -96,6 +96,7 @@ function card(r) {
   const c = el('section', { class: 'card' }, [head]);
   if (r.error) c.append(el('div', { class: 'err', text: r.error }));
   if (r.pageErrors?.length) c.append(el('div', { class: 'err', text: 'page errors:\\n' + r.pageErrors.join('\\n') }));
+  if (r.blocked?.length) c.append(el('div', { class: 'err', text: 'blocked requests to: ' + r.blocked.join(', ') }));
   if (r.status === 'changed' && view === 'slider') c.append(slider(r));
   else if (r.status === 'changed' && view === 'diff') c.append(el('div', { class: 'imgs' }, [figure('diff', r.diff)]));
   else {

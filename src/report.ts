@@ -26,6 +26,8 @@ export interface SnapshotResult {
   message?: string;
   error?: string;
   pageErrors?: string[];
+  /** Hostnames `allowedHostnames` blocked while rendering (why an asset may be missing). */
+  blocked?: string[];
 }
 
 export interface Report {

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { Page } from 'playwright';
+import { devices, type Page } from 'playwright';
 import { CODECS, COMPARATORS, type Codec, type Comparator } from './compare.js';
 
 export type BrowserName = 'chromium' | 'firefox' | 'webkit';
@@ -16,12 +16,37 @@ export type Status = 'unchanged' | 'changed' | 'added' | 'updated' | 'removed' |
  */
 export type UpdateMode = 'new' | 'none' | 'all';
 
+/**
+ * What happens to elements marked `data-pixelgate-hide` (Happo: `data-happo-hide` + `hideBehavior`):
+ * - `hide`   (default): `visibility: hidden` while the screenshot is taken; the space stays.
+ * - `ignore`: they stay visible in the page but are painted over with a solid box (Playwright
+ *   `mask`), so their content never makes a diff.
+ */
+export type HideBehavior = 'hide' | 'ignore';
+
+/** The attribute that marks content to hide or ignore. */
+export const HIDE_ATTR = 'data-pixelgate-hide';
+
 export interface Target {
-  /** Browser engine. Default `chromium`. */
+  /** Browser engine. Default: the device's browser, else `chromium`. */
   browser?: BrowserName;
-  /** `WIDTHxHEIGHT`, e.g. `1280x720`. Default `1280x720`. */
+  /**
+   * Emulate a device from Playwright's list (`'iPhone 15'`, `'Pixel 7'`, `'iPad Pro 11'`...):
+   * its viewport, scale factor, user agent, touch and mobile mode. `viewport` and
+   * `deviceScaleFactor` set here win over the device's.
+   */
+  device?: string;
+  /** `WIDTHxHEIGHT`, e.g. `1280x720`. Default: the device's, else `1280x720`. */
   viewport?: string;
   deviceScaleFactor?: number;
+  /** `prefers-color-scheme`. Default `light`. */
+  colorScheme?: 'light' | 'dark' | 'no-preference';
+  /** `prefers-reduced-motion`. Default `reduce`. */
+  reducedMotion?: 'reduce' | 'no-preference';
+  /** Headers sent with every request of this target. */
+  extraHTTPHeaders?: Record<string, string>;
+  /** Overrides the top-level `hideBehavior` for this target. */
+  hideBehavior?: HideBehavior;
 }
 
 export interface PageSnap {
@@ -40,6 +65,8 @@ export interface PageSnap {
    * `waitFor` is visible, before the stability loop. TS/JS configs only.
    */
   beforeCapture?: (page: Page) => Promise<void> | void;
+  /** Selectors painted over with a solid box in this snapshot, on top of the top-level `mask`. */
+  mask?: string[];
 }
 
 export interface StorybookSource {
@@ -50,6 +77,8 @@ export interface StorybookSource {
   exclude?: string[];
   /** Element to capture inside the story iframe. Default `#storybook-root`. */
   selector?: string;
+  /** Selectors painted over in every story, on top of the top-level `mask`. */
+  mask?: string[];
 }
 
 export interface ViteSource {
@@ -126,6 +155,22 @@ export interface Config {
   /** Navigation + readiness timeout per snapshot, ms. Default 30000. */
   timeoutMs?: number;
   stabilize?: Stabilize;
+  /** What to do with `data-pixelgate-hide` elements. Default `hide`. */
+  hideBehavior?: HideBehavior;
+  /**
+   * Selectors painted over with a solid box in every snapshot (dynamic content you
+   * cannot mark with `data-pixelgate-hide`, e.g. third-party widgets).
+   */
+  mask?: string[];
+  /** Color of masked boxes. Default `#FF00FF`. */
+  maskColor?: string;
+  /**
+   * Block every request whose hostname matches none of these globs (`cdn.example.com`,
+   * `*.example.com`), so third-party fonts, scripts and images cannot change or break a
+   * snapshot. The hosts of the snapshot URLs themselves (Vite, `baseUrl`, Storybook) are
+   * always allowed. `[]` = only those. Default: no blocking.
+   */
+  allowedHostnames?: string[];
   /** Baseline update mode. Default: `none` when `CI` is set, else `new`. */
   update?: UpdateMode;
   /**
@@ -145,9 +190,18 @@ export interface ResolvedTarget {
   /** Directory name under baseline/current/diff: `name`, or `name-platform`. */
   dir: string;
   browser: BrowserName;
+  device?: string;
   width: number;
   height: number;
   deviceScaleFactor: number;
+  isMobile: boolean;
+  hasTouch: boolean;
+  userAgent?: string;
+  screen?: { width: number; height: number };
+  colorScheme: 'light' | 'dark' | 'no-preference';
+  reducedMotion: 'reduce' | 'no-preference';
+  extraHTTPHeaders?: Record<string, string>;
+  hideBehavior: HideBehavior;
 }
 
 export interface ResolvedConfig {
@@ -165,6 +219,9 @@ export interface ResolvedConfig {
   concurrency: number;
   timeoutMs: number;
   stabilize: Stabilize & { stableTimeoutMs: number; stableIntervalMs: number };
+  mask: string[];
+  maskColor?: string;
+  allowedHostnames?: string[];
   update: UpdateMode;
   platformSpecific: boolean;
   failOn: Status[];
@@ -205,6 +262,41 @@ export function parseViewport(viewport: string): { width: number; height: number
 }
 
 const BROWSERS: BrowserName[] = ['chromium', 'firefox', 'webkit'];
+const HIDE_BEHAVIORS: HideBehavior[] = ['hide', 'ignore'];
+
+function resolveTarget(name: string, t: Target, platformSpecific: boolean, defaultHide: HideBehavior): ResolvedTarget {
+  const dev = t.device === undefined ? undefined : devices[t.device];
+  if (t.device !== undefined && !dev) {
+    throw new Error(`Target "${name}": unknown device "${t.device}". Use a name from Playwright's device list, e.g. "iPhone 15" or "Pixel 7".`);
+  }
+  const browser = t.browser ?? (dev?.defaultBrowserType as BrowserName | undefined) ?? 'chromium';
+  if (!BROWSERS.includes(browser)) throw new Error(`Target "${name}": unknown browser "${browser}"`);
+  const isMobile = dev?.isMobile ?? false;
+  // Fail at config time: inside the run this would be one crash for the whole target.
+  if (isMobile && browser === 'firefox') {
+    throw new Error(`Target "${name}": Firefox has no mobile emulation, so device "${t.device}" needs chromium or webkit`);
+  }
+  const hideBehavior = t.hideBehavior ?? defaultHide;
+  if (!HIDE_BEHAVIORS.includes(hideBehavior)) throw new Error(`Target "${name}": \`hideBehavior\` must be "hide" or "ignore"`);
+  return {
+    name,
+    dir: targetDir(name, platformSpecific),
+    browser,
+    device: t.device,
+    // An explicit viewport wins; else the device's; the 1280x720 default only without either.
+    ...(t.viewport ? parseViewport(t.viewport) : (dev?.viewport ?? parseViewport('1280x720'))),
+    deviceScaleFactor: t.deviceScaleFactor ?? dev?.deviceScaleFactor ?? 1,
+    isMobile,
+    hasTouch: dev?.hasTouch ?? false,
+    userAgent: dev?.userAgent,
+    // At runtime descriptors carry `screen`, but `DeviceDescriptor` does not type it.
+    screen: (dev as { screen?: { width: number; height: number } } | undefined)?.screen,
+    colorScheme: t.colorScheme ?? 'light',
+    reducedMotion: t.reducedMotion ?? 'reduce',
+    extraHTTPHeaders: t.extraHTTPHeaders,
+    hideBehavior,
+  };
+}
 
 export function resolveConfig(config: Config, rootDir: string, overrides: ConfigOverrides = {}): ResolvedConfig {
   const update = overrides.update ?? config.update ?? (isCI() ? 'none' : 'new');
@@ -213,18 +305,8 @@ export function resolveConfig(config: Config, rootDir: string, overrides: Config
 
   const targetEntries = Object.entries(config.targets ?? { chromium: {} });
   if (targetEntries.length === 0) throw new Error('Config must define at least one target');
-  const targets = targetEntries.map(([name, t]) => {
-    const browser = t.browser ?? 'chromium';
-    if (!BROWSERS.includes(browser)) throw new Error(`Target "${name}": unknown browser "${browser}"`);
-    return {
-      name,
-      dir: targetDir(name, platformSpecific),
-      browser,
-      ...parseViewport(t.viewport ?? '1280x720'),
-      deviceScaleFactor: t.deviceScaleFactor ?? 1,
-    };
-  });
-
+  const hideBehavior = config.hideBehavior ?? 'hide';
+  const targets = targetEntries.map(([name, t]) => resolveTarget(name, t, platformSpecific, hideBehavior));
   const pages = config.pages ?? [];
   const seen = new Set<string>();
   for (const p of pages) {
@@ -280,6 +362,9 @@ export function resolveConfig(config: Config, rootDir: string, overrides: Config
       stableTimeoutMs: config.stabilize?.stableTimeoutMs ?? 5_000,
       stableIntervalMs: config.stabilize?.stableIntervalMs ?? 100,
     },
+    mask: config.mask ?? [],
+    maskColor: config.maskColor,
+    allowedHostnames: config.allowedHostnames,
     update,
     platformSpecific,
     failOn: config.failOn ?? (update === 'none' ? ['changed', 'error', 'added'] : ['changed', 'error']),

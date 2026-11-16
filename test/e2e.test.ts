@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, it } from 'vitest';
+import { pngCodec } from '../src/compare.js';
 import { resolveConfig, type Config, type ResolvedConfig, type UpdateMode } from '../src/config.js';
 import { approve } from '../src/report.js';
 import { run } from '../src/run.js';
@@ -35,8 +36,20 @@ const menu = `<!doctype html><body style="margin:0;font:20px sans-serif">
 <button id="toggle" onclick="document.getElementById('panel').hidden = false">Open</button>
 <div id="panel" hidden style="width:200px;height:100px;background:#16a34a;color:#fff">Panel</div></body>`;
 
+// Content that changes on every request, with and without the hide attribute.
+let counter = 0;
+const dynamic = (attr: string) => `<!doctype html><body style="margin:0;font:40px monospace">
+<div style="width:120px;height:40px;background:#2563eb"></div><div id="c" ${attr}>${counter++}</div></body>`;
+const dark = `<!doctype html><style>body{margin:0;background:#fff}
+@media (prefers-color-scheme: dark){body{background:#000}}</style><body></body>`;
+// A stylesheet from another hostname (localhost) than the page's (127.0.0.1).
+const external = () => `<!doctype html><link rel="stylesheet" href="http://localhost:${port}/ext.css">
+<body style="margin:0"><div class="x" style="width:100px;height:100px"></div></body>`;
+let lastHeaders: Record<string, string | string[] | undefined> = {};
+
 let server: Server;
 let origin: string;
+let port: number;
 let tmp: string;
 const platform = process.platform;
 
@@ -58,11 +71,22 @@ const file = (...p: string[]) => path.join(tmp, '.pixelgate', ...p);
 
 beforeAll(async () => {
   server = createServer((req, res) => {
-    const body = req.url === '/ticker' ? ticker : req.url === '/settle' ? settle : req.url === '/menu' ? menu : home();
-    res.writeHead(200, { 'content-type': 'text/html' }).end(body);
+    lastHeaders = req.headers;
+    if (req.url === '/ext.css') return void res.writeHead(200, { 'content-type': 'text/css' }).end('.x { background: #ff0000; }');
+    const routes: Record<string, () => string> = {
+      '/ticker': () => ticker,
+      '/settle': () => settle,
+      '/menu': () => menu,
+      '/dynamic': () => dynamic('data-pixelgate-hide'),
+      '/dynamic-plain': () => dynamic(''),
+      '/dark': () => dark,
+      '/external': external,
+    };
+    res.writeHead(200, { 'content-type': 'text/html' }).end((routes[req.url ?? ''] ?? home)());
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-  origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  port = (server.address() as AddressInfo).port;
+  origin = `http://127.0.0.1:${port}`;
   tmp = await mkdtemp(path.join(process.env.PIXELGATE_TEST_TMP ?? os.tmpdir(), 'pixelgate-e2e-'));
 });
 
@@ -233,6 +257,83 @@ describe('beforeCapture', () => {
     );
     assert.equal(r.results[0]!.status, 'error');
     assert.match(r.results[0]!.error!, /#nope|Timeout/);
+  });
+});
+
+describe('determinism: hide, ignore, mask, allowedHostnames', () => {
+  const one = (outDir: string, pages: Config['pages'], extra: Partial<Config> = {}) =>
+    cfgWith({ outDir, targets: { desktop: { viewport: '400x200' } }, pages, ...extra });
+  const twice = async (cfg: () => ResolvedConfig) => {
+    const first = await run(cfg());
+    assert.equal(first.summary.added, 1, JSON.stringify(first.results));
+    return run(cfg());
+  };
+  const pixels = async (outDir: string, name: string) =>
+    pngCodec.decode(await readFile(path.join(tmp, outDir, 'baseline', `desktop-${platform}`, `${name}.png`)));
+  const rgbAt = (img: { data: Uint8Array; width: number }, x: number, y: number) =>
+    Array.from(img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
+
+  it('control: content that changes per request makes a diff', async () => {
+    const r = await twice(() => one('.pg-plain', [{ name: 'p', url: `${origin}/dynamic-plain` }]));
+    assert.equal(r.summary.changed, 1, JSON.stringify(r.results));
+  });
+
+  it('data-pixelgate-hide (default `hide`): the changing content makes no diff', async () => {
+    const r = await twice(() => one('.pg-hide', [{ name: 'p', url: `${origin}/dynamic` }]));
+    assert.equal(r.summary.unchanged, 1, JSON.stringify(r.results));
+  });
+
+  it('hideBehavior `ignore`: painted over with maskColor, no diff', async () => {
+    const cfg = () => one('.pg-ignore', [{ name: 'p', url: `${origin}/dynamic` }], { hideBehavior: 'ignore', maskColor: '#00ff00' });
+    assert.equal((await twice(cfg)).summary.unchanged, 1);
+    const img = await pixels('.pg-ignore', 'p');
+    let green = 0;
+    for (let i = 0; i < img.data.length; i += 4) if (img.data[i] === 0 && img.data[i + 1] === 255 && img.data[i + 2] === 0) green++;
+    assert.ok(green > 100, `masked box drawn (${green} green pixels)`);
+  });
+
+  it('page-level `mask` covers content without the attribute', async () => {
+    const r = await twice(() => one('.pg-mask', [{ name: 'p', url: `${origin}/dynamic-plain`, mask: ['#c'] }]));
+    assert.equal(r.summary.unchanged, 1, JSON.stringify(r.results));
+  });
+
+  it('allowedHostnames blocks other hosts and reports them; the snapshot host stays allowed', async () => {
+    await run(one('.pg-open', [{ name: 'p', url: `${origin}/external` }]));
+    assert.deepEqual(rgbAt(await pixels('.pg-open', 'p'), 50, 50), [255, 0, 0], 'control: the localhost stylesheet loads');
+
+    const r = await run(one('.pg-blocked', [{ name: 'p', url: `${origin}/external` }], { allowedHostnames: [] }));
+    assert.deepEqual(r.results[0]!.blocked, ['localhost']);
+    assert.notDeepEqual(rgbAt(await pixels('.pg-blocked', 'p'), 50, 50), [255, 0, 0], 'stylesheet blocked');
+  });
+});
+
+describe('target emulation', () => {
+  const at = (outDir: string, target: NonNullable<Config['targets']>[string], url = `${origin}/dark`) =>
+    cfgWith({ outDir, targets: { t: target }, pages: [{ name: 'p', url, fullPage: false }] });
+  const shot = async (outDir: string) =>
+    pngCodec.decode(await readFile(path.join(tmp, outDir, 'baseline', `t-${platform}`, 'p.png')));
+
+  it('colorScheme: dark renders the dark media query, default stays light', async () => {
+    await run(at('.pg-light', { viewport: '200x100' }));
+    await run(at('.pg-dark', { viewport: '200x100', colorScheme: 'dark' }));
+    assert.deepEqual(Array.from((await shot('.pg-light')).data.subarray(0, 3)), [255, 255, 255]);
+    assert.deepEqual(Array.from((await shot('.pg-dark')).data.subarray(0, 3)), [0, 0, 0]);
+  });
+
+  it('extraHTTPHeaders are sent with the page request', async () => {
+    await run(at('.pg-headers', { viewport: '200x100', extraHTTPHeaders: { 'x-pixelgate-test': 'hello' } }));
+    assert.equal(lastHeaders['x-pixelgate-test'], 'hello');
+  });
+
+  it('device: Playwright descriptor sets viewport, scale factor and user agent', async () => {
+    const cfg = at('.pg-device', { device: 'Pixel 7' });
+    const t = cfg.targets[0]!;
+    assert.equal(t.browser, 'chromium');
+    assert.equal(t.isMobile, true);
+    await run(cfg);
+    assert.match(String(lastHeaders['user-agent']), /Pixel 7/);
+    const img = await shot('.pg-device');
+    assert.ok(Math.abs(img.width - t.width * t.deviceScaleFactor) <= 1, `${img.width} vs ${t.width}x${t.deviceScaleFactor}`);
   });
 });
 

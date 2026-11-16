@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { encode as encodePng } from 'fast-png';
 import { describe, it } from 'vitest';
-import { stableShot } from '../src/capture.js';
+import { allowList, isAllowed, maskSelectors, stableShot } from '../src/capture.js';
 import {
   compareImages,
   createMatcher,
@@ -13,6 +13,7 @@ import {
   type ComparatorResult,
   type DecodedImage,
 } from '../src/compare.js';
+import { devices } from 'playwright';
 import { isCI, parseViewport, resolveConfig } from '../src/config.js';
 import { resolveUrl, safeName } from '../src/names.js';
 import { determineOutcome, type OutcomeInput } from '../src/outcome.js';
@@ -436,5 +437,78 @@ describe('renderMarkdown (PR comment / job summary)', () => {
 
   it('marker cannot be closed early by the id', () => {
     assert.equal(commentMarker('a-->b'), '<!-- ab -->');
+  });
+});
+
+describe('targets: device, emulation, hideBehavior', () => {
+  const target = (targets: Parameters<typeof resolveConfig>[0]['targets'], extra = {}) =>
+    resolveConfig({ targets, pages: [{ name: 'p', url: 'http://x/' }], ...extra }, '/tmp').targets;
+
+  it('defaults keep existing baselines stable: light, reduced motion, hide, 1280x720', () => {
+    const [t] = target({ d: {} });
+    assert.equal(t!.colorScheme, 'light');
+    assert.equal(t!.reducedMotion, 'reduce');
+    assert.equal(t!.hideBehavior, 'hide');
+    assert.deepEqual([t!.width, t!.height, t!.deviceScaleFactor, t!.isMobile], [1280, 720, 1, false]);
+  });
+
+  it('a device brings its viewport, scale, UA, touch and browser; explicit values win', () => {
+    const pixel = devices['Pixel 7']!;
+    const [p] = target({ m: { device: 'Pixel 7' } });
+    assert.equal(p!.browser, 'chromium');
+    assert.deepEqual([p!.width, p!.height], [pixel.viewport.width, pixel.viewport.height]);
+    assert.equal(p!.deviceScaleFactor, pixel.deviceScaleFactor);
+    assert.equal(p!.userAgent, pixel.userAgent);
+    assert.equal(p!.hasTouch, true);
+    const [i] = target({ i: { device: 'iPhone 15', viewport: '300x500', deviceScaleFactor: 1 } });
+    assert.equal(i!.browser, 'webkit', 'the device picks its own browser');
+    assert.deepEqual([i!.width, i!.height, i!.deviceScaleFactor], [300, 500, 1]);
+  });
+
+  it('rejects unknown devices and mobile emulation on Firefox at config time', () => {
+    assert.throws(() => target({ x: { device: 'Nokia 3310' } }), /unknown device "Nokia 3310"/);
+    assert.throws(() => target({ x: { device: 'Pixel 7', browser: 'firefox' } }), /Firefox has no mobile emulation/);
+    assert.throws(() => target({ x: { hideBehavior: 'blur' as 'hide' } }), /hideBehavior/);
+  });
+
+  it('hideBehavior: global default, target override', () => {
+    const ts = target({ a: {}, b: { hideBehavior: 'hide' } }, { hideBehavior: 'ignore' });
+    assert.deepEqual(ts.map((t) => t.hideBehavior), ['ignore', 'hide']);
+  });
+});
+
+describe('mask and allowedHostnames helpers', () => {
+  it('maskSelectors: global + snapshot + hidden content when ignored', () => {
+    const snap = { name: 'p', url: 'http://x/', mask: ['.ad'] };
+    assert.deepEqual(maskSelectors({ mask: ['.clock'] }, snap, { hideBehavior: 'hide' }), ['.clock', '.ad']);
+    assert.deepEqual(maskSelectors({ mask: [] }, snap, { hideBehavior: 'ignore' }), ['.ad', '[data-pixelgate-hide]']);
+  });
+
+  it('allowList adds the hosts of the snapshot URLs', () => {
+    const snaps = [
+      { name: 'a', url: 'http://127.0.0.1:5173/app/' },
+      { name: 'b', url: 'http://localhost:6006/iframe.html?id=x' },
+      { name: 'c', url: 'file:///tmp/a.html' },
+    ];
+    assert.deepEqual(allowList(['*.cdn.example'], snaps), ['*.cdn.example', '127.0.0.1', 'localhost']);
+  });
+
+  it('isAllowed checks http(s)/ws(s) hostnames against globs, lets the rest through', () => {
+    const allow = ['127.0.0.1', '*.cdn.example', '::1'];
+    assert.equal(isAllowed('http://127.0.0.1:5173/x.js', allow), true);
+    assert.equal(isAllowed('https://a.cdn.example/font.woff2', allow), true);
+    assert.equal(isAllowed('https://fonts.googleapis.com/css', allow), false);
+    assert.equal(isAllowed('wss://evil.example/socket', allow), false);
+    assert.equal(isAllowed('http://[::1]:3000/', allow), true);
+    assert.equal(isAllowed('data:image/png;base64,AAAA', []), true);
+    assert.equal(isAllowed('not a url', []), true);
+  });
+
+  it('storybook mask reaches every story', () => {
+    const [s] = storiesFromIndex({ entries: { a: { id: 'button--primary', type: 'story' } } } as never, {
+      url: 'http://sb',
+      mask: ['.clock'],
+    });
+    assert.deepEqual(s!.mask, ['.clock']);
   });
 });

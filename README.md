@@ -42,7 +42,9 @@ import { defineConfig } from 'pixelgate';
 export default defineConfig({
   targets: {
     desktop: { browser: 'chromium', viewport: '1280x720' },
-    mobile: { browser: 'chromium', viewport: '375x667', deviceScaleFactor: 2 },
+    dark: { viewport: '1280x720', colorScheme: 'dark' },
+    // Playwright's device list: viewport, scale, user agent, touch, browser.
+    phone: { device: 'Pixel 7' },
     // firefox: { browser: 'firefox', viewport: '1280x720' },
   },
   // Plain URLs from a running dev server or preview build...
@@ -267,7 +269,7 @@ Before every capture pixelgate:
 
 - waits for `load`, then up to 5 s for network idle, then `document.fonts.ready` and pending image decodes;
 - injects CSS that zeroes animations and transitions and hides the caret, and uses Playwright's `animations: 'disabled'`;
-- runs with `reducedMotion: 'reduce'`, `locale: en-US`, `timezoneId: UTC`, light colour scheme;
+- runs with `locale: en-US`, `timezoneId: UTC` and, unless the target says otherwise, `reducedMotion: 'reduce'` and a light colour scheme;
 - optionally freezes `Date.now()` (`stabilize.fixedTime`);
 - then captures until the page holds still, like Vitest's `toMatchScreenshot`:
   if the first screenshot matches the baseline it's done (one capture, no
@@ -281,6 +283,72 @@ Before every capture pixelgate:
 
 CSS can stop animations but not JavaScript timers (tickers, carousels, data
 arriving late); the stability loop is what covers those.
+
+### Targets
+
+| target option | default | |
+| --- | --- | --- |
+| `browser` | the device's, else `chromium` | `chromium`, `firefox`, `webkit` |
+| `device` | | a name from Playwright's device list (`'iPhone 15'`, `'Pixel 7'`, `'iPad Pro 11'`): viewport, scale factor, user agent, touch, mobile mode |
+| `viewport` | the device's, else `1280x720` | wins over the device's |
+| `deviceScaleFactor` | the device's, else `1` | |
+| `colorScheme` | `light` | `dark`, `no-preference` |
+| `reducedMotion` | `reduce` | `no-preference` |
+| `extraHTTPHeaders` | | sent with every request |
+| `hideBehavior` | the top-level one | see below |
+
+Firefox has no mobile emulation, so a mobile `device` on `browser: 'firefox'`
+is a config error.
+
+## Hiding, masking and blocking
+
+Content that changes on its own (a visitor counter, a clock, an ad) does not
+belong in a baseline. Mark it:
+
+```html
+<span data-pixelgate-hide>1,289 visitors</span>
+```
+
+| `hideBehavior` | effect |
+| --- | --- |
+| `hide` (default) | `visibility: hidden` while the screenshot is taken; the element keeps its space |
+| `ignore` | the element stays visible in the page but is painted over with a solid box, so it never makes a diff |
+
+For content you cannot mark (third-party widgets), list selectors to paint
+over, in every snapshot or per page / Storybook source:
+
+```ts
+export default defineConfig({
+  mask: ['.intercom-launcher'],
+  maskColor: '#FF00FF', // default
+  pages: [{ name: 'home', url: '/', mask: ['.live-price'] }],
+});
+```
+
+Masked boxes are part of the screenshot, so adding a mask changes the
+baseline once.
+
+**Blocking requests.** Anything loaded from a third party (fonts, scripts,
+images, analytics) changes when that third party does and fails when it is
+down. `allowedHostnames` blocks every request to a hostname that matches none
+of its globs before it leaves the browser:
+
+```ts
+export default defineConfig({
+  allowedHostnames: [], // only the snapshot URLs' own hosts
+  // allowedHostnames: ['fonts.gstatic.com', '*.cdn.example.com'],
+});
+```
+
+The hosts of the snapshot URLs themselves (the Vite server, `baseUrl`,
+Storybook) are always allowed. Each snapshot reports the hostnames it blocked
+(`blocked` in `report.json`, and on the review page), so a missing font is
+easy to trace. Unset (the default), nothing is blocked and the HTTP cache
+stays on.
+
+In Vitest browser mode, Vitest takes the screenshots, so these options do not
+apply there. With the Playwright provider, `toMatchScreenshot`'s
+`screenshotOptions` take Playwright's own `mask` and `style`.
 
 ## CI and pull requests
 
@@ -377,6 +445,8 @@ Dependency policy: always on the latest release of every dependency. Dependabot
 opens the bumps weekly; `deps:check` must be clean before a release.
 
 ## Roadmap
+
+Happo parity status and the next slices: [docs/happo-parity.md](docs/happo-parity.md).
 
 - accessibility checks (axe-core) in the same render pass
 - DOM-snapshot capture inside Playwright/Cypress tests, rendered in several browsers

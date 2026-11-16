@@ -1,7 +1,8 @@
-import { chromium, firefox, webkit, type BrowserType, type Page } from 'playwright';
+import { chromium, firefox, webkit, type Browser, type BrowserContext, type BrowserType, type Page } from 'playwright';
 import { pngCodec, type Codec, type Matcher } from './compare.js';
-import type { PageSnap, ResolvedConfig, ResolvedTarget } from './config.js';
+import { HIDE_ATTR, type PageSnap, type ResolvedConfig, type ResolvedTarget } from './config.js';
 import { safeName } from './names.js';
+import { matchesAny } from './storybook.js';
 
 export { safeName };
 
@@ -69,6 +70,39 @@ export interface CaptureResult {
   error?: string;
   /** Uncaught page errors seen while rendering. */
   pageErrors: string[];
+  /** Hostnames whose requests `allowedHostnames` blocked while rendering. */
+  blocked?: string[];
+}
+
+/**
+ * Hostname globs a run may load from: the configured ones plus the hosts of the snapshot
+ * URLs themselves (the Vite server, `baseUrl`, Storybook), which only exist at run time.
+ */
+export function allowList(allowedHostnames: string[], snaps: PageSnap[]): string[] {
+  const own = new Set<string>();
+  for (const s of snaps) {
+    try {
+      const host = new URL(s.url).hostname;
+      if (host) own.add(host);
+    } catch {
+      // Not a URL; navigation reports it.
+    }
+  }
+  return [...allowedHostnames, ...own];
+}
+
+/** Whether a request may leave the browser. Only http(s)/ws(s) URLs are checked. */
+export function isAllowed(url: string, allow: string[]): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    // Throwing in a route handler would leave the request hanging; let the browser deal with it.
+    return true;
+  }
+  if (!/^(https?|wss?):$/.test(u.protocol)) return true;
+  // IPv6 hosts come back bracketed: `[::1]`.
+  return matchesAny(u.hostname.replace(/^\[|\]$/g, ''), allow);
 }
 
 async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise<void> {
@@ -90,15 +124,27 @@ async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise
   if (stabilize.waitMs) await page.waitForTimeout(stabilize.waitMs);
 }
 
+/** CSS applied only while a screenshot is taken; pierces shadow DOM and frames. */
+export const HIDE_CSS = `[${HIDE_ATTR}] { visibility: hidden !important; }`;
+
+/** Masked selectors for a snapshot: global, the snapshot's own, and hidden-but-ignored content. */
+export function maskSelectors(cfg: Pick<ResolvedConfig, 'mask'>, snap: PageSnap, target: Pick<ResolvedTarget, 'hideBehavior'>): string[] {
+  return [...cfg.mask, ...(snap.mask ?? []), ...(target.hideBehavior === 'ignore' ? [`[${HIDE_ATTR}]`] : [])];
+}
+
 /** Screenshots in the codec's format: natively when Playwright supports it, else PNG re-encoded. */
-function shooter(page: Page, snap: PageSnap, timeoutMs: number, codec: Codec): () => Promise<Buffer> {
+function shooter(page: Page, snap: PageSnap, cfg: ResolvedConfig, target: ResolvedTarget, codec: Codec): () => Promise<Buffer> {
   const native = codec.screenshot;
+  const masks = maskSelectors(cfg, snap, target);
   const opts = {
     animations: 'disabled' as const,
     caret: 'hide' as const,
-    timeout: timeoutMs,
+    timeout: cfg.timeoutMs,
     type: native?.type ?? 'png',
     ...(native?.type === 'jpeg' && native.quality !== undefined ? { quality: native.quality } : {}),
+    ...(target.hideBehavior === 'hide' ? { style: HIDE_CSS } : {}),
+    ...(masks.length ? { mask: masks.map((s) => page.locator(s)) } : {}),
+    ...(cfg.maskColor ? { maskColor: cfg.maskColor } : {}),
   };
   const raw = snap.selector
     ? () => page.locator(snap.selector!).first().screenshot(opts)
@@ -121,27 +167,70 @@ export interface CaptureHooks {
   onCapture(result: CaptureResult): Promise<void>;
 }
 
+async function newContext(browser: Browser, target: ResolvedTarget, allow: string[] | undefined): Promise<{
+  context: BrowserContext;
+  blocked: Map<Page, Set<string>>;
+}> {
+  const context = await browser.newContext({
+    viewport: { width: target.width, height: target.height },
+    deviceScaleFactor: target.deviceScaleFactor,
+    isMobile: target.isMobile,
+    hasTouch: target.hasTouch,
+    ...(target.userAgent ? { userAgent: target.userAgent } : {}),
+    ...(target.screen ? { screen: target.screen } : {}),
+    reducedMotion: target.reducedMotion,
+    colorScheme: target.colorScheme,
+    locale: 'en-US',
+    timezoneId: 'UTC',
+    ...(target.extraHTTPHeaders ? { extraHTTPHeaders: target.extraHTTPHeaders } : {}),
+    // Requests made by a service worker bypass routing; with an allowlist, have none.
+    ...(allow ? { serviceWorkers: 'block' as const } : {}),
+  });
+  const blocked = new Map<Page, Set<string>>();
+  // Only route when asked: a routed context gets no HTTP cache.
+  if (allow) {
+    await context.route('**/*', (route) => {
+      const req = route.request();
+      if (isAllowed(req.url(), allow)) return route.continue();
+      try {
+        blocked.get(req.frame().page())?.add(new URL(req.url()).hostname);
+      } catch {
+        // No frame (e.g. a worker): still blocked, just not attributed.
+      }
+      return route.abort('blockedbyclient');
+    });
+  }
+  return { context, blocked };
+}
+
 export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], matcher: Matcher, hooks: CaptureHooks): Promise<void> {
+  const allow = cfg.allowedHostnames && allowList(cfg.allowedHostnames, snaps);
   for (const target of cfg.targets) {
     const browser = await ENGINES[target.browser].launch();
     try {
-      const context = await browser.newContext({
-        viewport: { width: target.width, height: target.height },
-        deviceScaleFactor: target.deviceScaleFactor,
-        reducedMotion: 'reduce',
-        colorScheme: 'light',
-        locale: 'en-US',
-        timezoneId: 'UTC',
-      });
+      let ctx: Awaited<ReturnType<typeof newContext>>;
+      try {
+        ctx = await newContext(browser, target, allow);
+      } catch (e) {
+        // One bad target (e.g. an emulation the engine rejects) fails its snapshots, not the run.
+        const error = e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e);
+        for (const snap of snaps) {
+          await hooks.onCapture({ target: target.dir, name: snap.name, reference: null, error, pageErrors: [] });
+        }
+        continue;
+      }
+      const { context, blocked } = ctx;
       await pool(snaps, cfg.concurrency, async (snap) => {
         const page = await context.newPage();
         const pageErrors: string[] = [];
         page.on('pageerror', (e) => pageErrors.push(e.message));
+        const hosts = new Set<string>();
+        blocked.set(page, hosts);
         const reference = await hooks.reference(target.dir, snap.name);
         const r: CaptureResult = { target: target.dir, name: snap.name, reference, pageErrors };
         try {
           await prepare(page, snap, cfg);
-          r.shot = await stableShot(shooter(page, snap, cfg.timeoutMs, matcher.codec), reference, {
+          r.shot = await stableShot(shooter(page, snap, cfg, target, matcher.codec), reference, {
             same: matcher.same,
             timeoutMs: cfg.stabilize.stableTimeoutMs,
             intervalMs: cfg.stabilize.stableIntervalMs,
@@ -149,6 +238,8 @@ export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], matcher
         } catch (e) {
           r.error = e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e);
         } finally {
+          if (hosts.size) r.blocked = [...hosts].sort();
+          blocked.delete(page);
           await page.close();
         }
         await hooks.onCapture(r);
