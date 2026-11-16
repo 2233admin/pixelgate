@@ -74,57 +74,55 @@ function imageUrl(base: string, rel: string): string {
   return base.replace(/\/+$/, '') + '/' + rel.split('/').map(encodeURIComponent).join('/');
 }
 
-/** The pull-request comment / job summary for a report, as GitHub-flavoured Markdown. */
-export function renderMarkdown(report: Report, opts: MarkdownOptions = {}): string {
-  const { maxRows = 50, maxImages = 10 } = opts;
+function headline(report: Report, id?: string): string[] {
   const s = report.summary;
   const counts = LISTED.filter((st) => s[st] > 0).map((st) => `${s[st]} ${st}`);
   if (s.unchanged > 0) counts.push(`${s.unchanged} unchanged`);
-  const lines = [
-    commentMarker(opts.id),
+  return [
+    commentMarker(id),
     `### pixelgate: ${report.failed ? 'failed' : 'passed'}`,
     '',
     `${counts.join(', ') || 'no snapshots'} (${s.total} total).`,
   ];
+}
 
-  const listed = report.results.filter((r) => LISTED.includes(r.status));
-  if (listed.length) {
-    lines.push('', '| Status | Snapshot | Target | Detail |', '| --- | --- | --- | --- |');
-    for (const r of listed.slice(0, maxRows)) {
-      lines.push(`| ${r.status} | ${code(r.name)} | ${code(r.target)} | ${cell(detail(r))} |`);
-    }
-    if (listed.length > maxRows) lines.push('', `…and ${listed.length - maxRows} more in the full report.`);
+function table(listed: SnapshotResult[], maxRows: number): string[] {
+  if (!listed.length) return [];
+  const rows = listed
+    .slice(0, maxRows)
+    .map((r) => `| ${r.status} | ${code(r.name)} | ${code(r.target)} | ${cell(detail(r))} |`);
+  const more = listed.length > maxRows ? ['', `…and ${listed.length - maxRows} more in the full report.`] : [];
+  return ['', '| Status | Snapshot | Target | Detail |', '| --- | --- | --- | --- |', ...rows, ...more];
+}
+
+function screenshots(listed: SnapshotResult[], base: string | undefined, open: boolean, maxImages: number): string[] {
+  const withImages = base ? listed.filter((r) => images(r).length) : [];
+  if (!withImages.length) return [];
+  const lines = ['', `<details${open ? ' open' : ''}><summary>Screenshots</summary>`, ''];
+  for (const r of withImages.slice(0, maxImages)) {
+    const imgs = images(r);
+    const tags = imgs.map(([label, rel]) => {
+      const url = imageUrl(base!, rel);
+      return `<a href="${url}"><img src="${url}" alt="${label}" width="260"></a>`;
+    });
+    lines.push(
+      `**${code(r.name)}** ${code(r.target)}: ${r.status}`,
+      '',
+      `| ${imgs.map(([label]) => label).join(' | ')} |`,
+      `| ${imgs.map(() => '---').join(' | ')} |`,
+      `| ${tags.join(' | ')} |`,
+      '',
+    );
   }
+  if (withImages.length > maxImages) lines.push(`…and ${withImages.length - maxImages} more in the full report.`, '');
+  lines.push('</details>');
+  return lines;
+}
 
-  const withImages = opts.imageBaseUrl ? listed.filter((r) => images(r).length) : [];
-  if (withImages.length) {
-    lines.push('', `<details${report.failed ? ' open' : ''}><summary>Screenshots</summary>`, '');
-    for (const r of withImages.slice(0, maxImages)) {
-      const imgs = images(r);
-      lines.push(
-        `**${code(r.name)}** ${code(r.target)}: ${r.status}`,
-        '',
-        `| ${imgs.map(([label]) => label).join(' | ')} |`,
-        `| ${imgs.map(() => '---').join(' | ')} |`,
-        `| ${imgs
-          .map(([label, rel]) => {
-            const url = imageUrl(opts.imageBaseUrl!, rel);
-            return `<a href="${url}"><img src="${url}" alt="${label}" width="260"></a>`;
-          })
-          .join(' | ')} |`,
-        '',
-      );
-    }
-    if (withImages.length > maxImages) lines.push(`…and ${withImages.length - maxImages} more in the full report.`, '');
-    lines.push('</details>');
-  }
-
-  const links = [
-    opts.reportUrl && `[Full report](${opts.reportUrl})`,
-    opts.runUrl && `[CI run](${opts.runUrl})`,
-  ].filter(Boolean);
+function footer(report: Report, opts: MarkdownOptions): string[] {
+  const lines: string[] = [];
+  const links = [opts.reportUrl && `[Full report](${opts.reportUrl})`, opts.runUrl && `[CI run](${opts.runUrl})`].filter(Boolean);
   if (links.length) lines.push('', links.join(' · '));
-
   const accept = report.results.some((r) => r.status === 'changed' || r.status === 'added');
   if (accept && opts.acceptCommand) {
     lines.push(
@@ -136,5 +134,19 @@ export function renderMarkdown(report: Report, opts: MarkdownOptions = {}): stri
       '```',
     );
   }
-  return lines.join('\n') + '\n';
+  return lines;
+}
+
+/** The pull-request comment / job summary for a report, as GitHub-flavoured Markdown. */
+export function renderMarkdown(report: Report, opts: MarkdownOptions = {}): string {
+  const { maxRows = 50, maxImages = 10 } = opts;
+  const listed = report.results.filter((r) => LISTED.includes(r.status));
+  return (
+    [
+      ...headline(report, opts.id),
+      ...table(listed, maxRows),
+      ...screenshots(listed, opts.imageBaseUrl, report.failed, maxImages),
+      ...footer(report, opts),
+    ].join('\n') + '\n'
+  );
 }
