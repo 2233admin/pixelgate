@@ -2,14 +2,17 @@
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { findConfigFile, loadConfig } from './config.js';
-import { approve, reportDir, type OutDir } from './report.js';
+import { renderMarkdown } from './markdown.js';
+import { approve, readReport, reportDir, type OutDir } from './report.js';
 import { run } from './run.js';
 
 const HELP = `pixelgate - visual regression gate
 
 Usage:
   pixelgate run      [--config <file>] [--only <glob>]... [--json] [-u | --ci]
-  pixelgate approve  [--config <file> | --out-dir <dir>] [--only <glob>]... [--prune]
+  pixelgate approve  [--config <file> | --out-dir <dir>] [--from <dir>] [--only <glob>]... [--prune]
+  pixelgate summary  [--config <file> | --out-dir <dir>] [--id <id>] [--report-url <url>]
+                     [--run-url <url>] [--image-base <url>] [--accept-command <cmd>]
 
 run      Capture every snapshot, diff against baseline, write <outDir>/report/.
          Exit 0 = pass, 1 = statuses in \`failOn\` present, 2 = usage/config error.
@@ -18,8 +21,14 @@ run      Capture every snapshot, diff against baseline, write <outDir>/report/.
          -u / --update also overwrites mismatching baselines.
 approve  Promote current screenshots of changed/added snapshots (from the last
          run, or the last Vitest run with PixelgateReporter) to baseline.
+         --from <dir> takes them from another run's out dir instead, e.g. a CI
+         artifact from \`gh run download\`: how a Windows/macOS machine accepts
+         Linux CI baselines.
          --prune also deletes baselines reported as removed.
          Without a pixelgate config, uses --out-dir (default .pixelgate).
+summary  Print the last report as Markdown for a pull-request comment or CI job
+         summary. --image-base is the URL the report's image paths resolve
+         against (no images without it).
 
 --json   Print the report JSON to stdout (progress goes to stderr).`;
 
@@ -33,8 +42,14 @@ async function main(argv: string[]): Promise<number> {
       json: { type: 'boolean' },
       prune: { type: 'boolean' },
       'out-dir': { type: 'string' },
+      from: { type: 'string' },
       update: { type: 'boolean', short: 'u' },
       ci: { type: 'boolean' },
+      id: { type: 'string' },
+      'report-url': { type: 'string' },
+      'run-url': { type: 'string' },
+      'image-base': { type: 'string' },
+      'accept-command': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -45,6 +60,11 @@ async function main(argv: string[]): Promise<number> {
   }
   const cwd = process.cwd();
   const log = (msg: string) => process.stderr.write(msg + '\n');
+  // approve/summary only need the out dir: from the config when there is one, else --out-dir.
+  const outDir = async (): Promise<OutDir> =>
+    values.config || (!values['out-dir'] && findConfigFile(cwd))
+      ? await loadConfig(cwd, values.config)
+      : { outDir: path.resolve(cwd, values['out-dir'] ?? '.pixelgate') };
 
   if (cmd === 'run') {
     if (values.update && values.ci) throw new Error('--update and --ci are mutually exclusive');
@@ -64,7 +84,8 @@ async function main(argv: string[]): Promise<number> {
     if (cfg.update === 'none' && s.added > 0) {
       log(
         `${s.added} snapshot(s) have no baseline for this platform (${process.platform}). ` +
-          'Their screenshots are in .pixelgate/current/: review them (e.g. from the CI artifact), run `pixelgate approve`, commit .pixelgate/baseline/.',
+          'Their screenshots are in .pixelgate/current/: review them (e.g. from the CI artifact), run `pixelgate approve` ' +
+          '(`--from <downloaded artifact>` on another machine), commit .pixelgate/baseline/.',
       );
     }
     log(`report: ${path.join(reportDir(cfg), 'index.html')}`);
@@ -72,13 +93,22 @@ async function main(argv: string[]): Promise<number> {
     return report.failed ? 1 : 0;
   }
   if (cmd === 'approve') {
-    const target: OutDir =
-      values.config || (!values['out-dir'] && findConfigFile(cwd))
-        ? await loadConfig(cwd, values.config)
-        : { outDir: path.resolve(cwd, values['out-dir'] ?? '.pixelgate') };
-    const done = await approve(target, { only: values.only, prune: values.prune });
+    const done = await approve(await outDir(), { only: values.only, prune: values.prune, from: values.from });
     for (const r of done) log(`approved ${r.status} ${r.target} ${r.name}`);
     log(`${done.length} snapshot(s) approved`);
+    return 0;
+  }
+  if (cmd === 'summary') {
+    const report = await readReport(await outDir());
+    process.stdout.write(
+      renderMarkdown(report, {
+        id: values.id,
+        reportUrl: values['report-url'],
+        runUrl: values['run-url'],
+        imageBaseUrl: values['image-base'],
+        acceptCommand: values['accept-command'],
+      }),
+    );
     return 0;
   }
   log(`Unknown command "${cmd}"\n\n${HELP}`);

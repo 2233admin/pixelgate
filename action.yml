@@ -1,0 +1,133 @@
+name: pixelgate
+description: Visual regression gate for pull requests. Runs pixelgate, uploads the review report, and comments the changed screenshots on the pull request.
+author: 2233admin
+branding:
+  icon: eye
+  color: blue
+
+inputs:
+  working-directory:
+    description: Directory with the pixelgate config, where the pixelgate package is installed.
+    default: .
+  command:
+    description: How to call the pixelgate CLI from working-directory.
+    default: npx --no pixelgate
+  args:
+    description: "Extra arguments for `pixelgate run`, e.g. `--only 'button--*'`."
+    default: ''
+  out-dir:
+    description: The config's `outDir`, relative to working-directory.
+    default: .pixelgate
+  artifact-name:
+    description: Name of the uploaded artifact (the whole out dir, review report included). Give each pixelgate job its own name; it also keeps their pull-request comments apart.
+    default: pixelgate
+  comment:
+    description: Comment on the pull request (needs `pull-requests write`). Later runs update the same comment. A passing run with no earlier comment posts nothing.
+    default: 'true'
+  images-branch:
+    description: Branch to push the screenshots of changed, added, removed and failed snapshots to, so the comment can show them (needs `contents write`; images render for public repositories). Empty means a comment without images.
+    default: ''
+  fail:
+    description: Fail the step when the gate fails.
+    default: 'true'
+  github-token:
+    description: Token for the comment and the images branch.
+    default: ${{ github.token }}
+
+outputs:
+  result:
+    description: "`pass`, `fail` (the gate failed) or `error` (pixelgate itself failed, e.g. a config error)."
+    value: ${{ steps.run.outputs.result }}
+  artifact-url:
+    description: URL of the uploaded artifact.
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      name: pixelgate run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PG_COMMAND: ${{ inputs.command }}
+        PG_ARGS: ${{ inputs.args }}
+        PG_OUT: ${{ inputs.out-dir }}
+      run: |
+        set +e
+        eval "$PG_COMMAND run --ci $PG_ARGS"
+        code=$?
+        set -e
+        case $code in 0) result=pass ;; 1) result=fail ;; *) result=error ;; esac
+        echo "result=$result" >> "$GITHUB_OUTPUT"
+        if [ -f "$PG_OUT/report/report.json" ]; then
+          echo "report=true" >> "$GITHUB_OUTPUT"
+          echo "out=$(cd "$PG_OUT" && pwd)" >> "$GITHUB_OUTPUT"
+        fi
+
+    - id: upload
+      name: Upload report
+      if: ${{ !cancelled() && steps.run.outputs.report == 'true' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.run.outputs.out }}
+        include-hidden-files: true
+        if-no-files-found: error
+        overwrite: true
+
+    - id: images
+      name: Push screenshots for the comment
+      if: ${{ !cancelled() && steps.run.outputs.report == 'true' && inputs.images-branch != '' }}
+      shell: bash
+      env:
+        PG_OUT_ABS: ${{ steps.run.outputs.out }}
+        PG_BRANCH: ${{ inputs.images-branch }}
+        PG_PREFIX: runs/${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.artifact-name }}
+        PG_TOKEN: ${{ inputs.github-token }}
+      run: node "$GITHUB_ACTION_PATH/action/images.mjs"
+
+    - id: summary
+      name: Job summary
+      if: ${{ !cancelled() && steps.run.outputs.report == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PG_COMMAND: ${{ inputs.command }}
+        PG_OUT: ${{ inputs.out-dir }}
+        PG_ID: ${{ inputs.artifact-name }}
+        PG_ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        PG_IMAGE_BASE: ${{ steps.images.outputs.base }}
+        PG_WD: ${{ inputs.working-directory }}
+      run: |
+        run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        cd_prefix=""
+        [ "$PG_WD" != "." ] && cd_prefix="cd $PG_WD && "
+        accept="${cd_prefix}d=\$(mktemp -d) && gh run download $GITHUB_RUN_ID -R $GITHUB_REPOSITORY -n $PG_ID -D \"\$d\" && $PG_COMMAND approve --from \"\$d\""
+        args=(summary --out-dir "$PG_OUT" --id "$PG_ID" --run-url "$run_url" --accept-command "$accept")
+        [ -n "$PG_ARTIFACT_URL" ] && args+=(--report-url "$PG_ARTIFACT_URL")
+        [ -n "$PG_IMAGE_BASE" ] && args+=(--image-base "$PG_IMAGE_BASE")
+        file="$RUNNER_TEMP/pixelgate-$PG_ID.md"
+        eval "$PG_COMMAND"' "${args[@]}"' > "$file"
+        cat "$file" >> "$GITHUB_STEP_SUMMARY"
+        echo "file=$file" >> "$GITHUB_OUTPUT"
+
+    - name: Comment on the pull request
+      if: ${{ !cancelled() && steps.summary.outputs.file != '' && inputs.comment == 'true' && github.event.pull_request.number }}
+      shell: bash
+      env:
+        PG_BODY_FILE: ${{ steps.summary.outputs.file }}
+        PG_ID: ${{ inputs.artifact-name }}
+        PG_PR: ${{ github.event.pull_request.number }}
+        PG_RESULT: ${{ steps.run.outputs.result }}
+        PG_TOKEN: ${{ inputs.github-token }}
+      run: node "$GITHUB_ACTION_PATH/action/comment.mjs"
+
+    - name: Gate
+      if: ${{ !cancelled() && inputs.fail == 'true' && steps.run.outputs.result != 'pass' }}
+      shell: bash
+      env:
+        PG_RESULT: ${{ steps.run.outputs.result }}
+      run: |
+        echo "::error title=pixelgate::visual regression gate: $PG_RESULT (see the job summary and the report artifact)"
+        exit 1

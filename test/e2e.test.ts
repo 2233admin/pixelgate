@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
@@ -136,6 +136,39 @@ describe('update modes', () => {
     assert.equal(r.failed, true);
     assert.ok(existsSync(file('current', `desktop-${platform}`, 'fresh.png')));
     assert.ok(!existsSync(file('baseline', `desktop-${platform}`, 'fresh.png')));
+  });
+});
+
+describe('approve --from (accept CI screenshots on another machine)', () => {
+  const ci = (dir: string) =>
+    cfgWith({ outDir: dir, targets: { desktop: { viewport: '800x600' } }, pages: [{ name: 'card', url: `${origin}/`, selector: '#app' }] }, 'none');
+
+  it('copies new screenshots of a CI run into the local baseline, then that baseline passes', async () => {
+    const first = await run(ci('.pixelgate-ci'));
+    assert.equal(first.summary.added, 1, JSON.stringify(first.results));
+    assert.equal(first.failed, true, 'mode none: a missing baseline fails');
+
+    const local = path.join(tmp, '.pixelgate-local');
+    const done = await approve({ outDir: local }, { from: path.join(tmp, '.pixelgate-ci') });
+    assert.deepEqual(done.map((r) => r.status), ['added']);
+    assert.ok(existsSync(path.join(local, 'baseline', `desktop-${platform}`, 'card.png')));
+    const ciReport = JSON.parse(await readFile(path.join(tmp, '.pixelgate-ci', 'report', 'report.json'), 'utf8'));
+    assert.equal(ciReport.summary.added, 1, 'the downloaded report is left as it was');
+
+    assert.equal((await run(ci('.pixelgate-local'))).summary.unchanged, 1);
+  });
+
+  it('refuses report paths that point outside the out dirs', async () => {
+    const evil = path.join(tmp, '.pixelgate-evil');
+    await mkdir(path.join(evil, 'report'), { recursive: true });
+    const result = { target: 'desktop', name: 'x', status: 'added', current: '../../outside.png' };
+    await writeFile(path.join(evil, 'report', 'report.json'), JSON.stringify({ results: [result], failOn: [] }));
+    await assert.rejects(approve({ outDir: path.join(tmp, '.pixelgate-x') }, { from: evil }), /escapes/);
+    const target = { ...result, current: 'current/x.png', target: '../../up' };
+    await writeFile(path.join(evil, 'report', 'report.json'), JSON.stringify({ results: [target], failOn: [] }));
+    await mkdir(path.join(evil, 'current'), { recursive: true });
+    await writeFile(path.join(evil, 'current', 'x.png'), 'png');
+    await assert.rejects(approve({ outDir: path.join(tmp, '.pixelgate-x') }, { from: evil }), /escapes/);
   });
 });
 

@@ -22,6 +22,7 @@ export { determineOutcome, applyOutcome, toResult, type Outcome } from './outcom
 export { safeName, resolveUrl } from './names.js';
 export { storiesFromIndex, fetchStorybookPages } from './storybook.js';
 export { startVite, type RunningServer } from './vite.js';
+export { renderMarkdown, commentMarker, type MarkdownOptions } from './markdown.js';
 export { run, collectSnaps, matcherFor, type RunOptions } from './run.js';
 export {
   approve,

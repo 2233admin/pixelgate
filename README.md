@@ -97,6 +97,8 @@ pixelgate run --ci     # CI mode: write no baselines, fail on missing ones (auto
 pixelgate approve      # accept changed/added snapshots from the last run as the new baseline
 pixelgate approve --only 'button--*'
 pixelgate approve --prune   # also delete baselines whose page/story is gone
+pixelgate approve --from <dir>  # accept from another run's out dir, e.g. a downloaded CI artifact
+pixelgate summary      # the last report as Markdown (PR comment, CI job summary)
 pixelgate run --json   # report JSON on stdout, for scripts and agents
 ```
 
@@ -280,20 +282,76 @@ Before every capture pixelgate:
 CSS can stop animations but not JavaScript timers (tickers, carousels, data
 arriving late); the stability loop is what covers those.
 
-## CI
+## CI and pull requests
+
+This repository is also a GitHub Action. On a pull request it runs the gate,
+uploads the review report as an artifact, writes a job summary and keeps one
+comment on the pull request up to date:
 
 ```yaml
 # .github/workflows/visual.yml
-- run: pnpm exec playwright install --with-deps chromium
-- run: pnpm build && (pnpm preview --port 5173 &) && npx wait-on http://localhost:5173
-- run: pnpm exec pixelgate run        # CI is set, so this runs in mode none
-- if: failure()
-  uses: actions/upload-artifact@v4
-  with: { name: pixelgate-report, path: .pixelgate }
+name: visual
+on: pull_request
+permissions:
+  contents: write # only for images-branch
+  pull-requests: write # the comment
+jobs:
+  visual:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium-headless-shell
+      # Pin the same commit as the pixelgate you installed.
+      - uses: 2233admin/pixelgate@<sha>
+        with:
+          images-branch: pixelgate-images # optional: screenshots in the comment
 ```
 
-To accept a change: download the artifact (or reproduce locally on the same
-OS), `pixelgate approve`, commit the updated `.pixelgate/baseline/`, push.
+The comment lists every changed, added, removed and failed snapshot, links the
+report artifact and the run, and prints the command that accepts the change.
+With `images-branch` it also shows baseline, current and diff images.
+
+| input | default | |
+| --- | --- | --- |
+| `working-directory` | `.` | where the pixelgate config is |
+| `command` | `npx --no pixelgate` | how to call the CLI there |
+| `args` | | extra `pixelgate run` arguments, e.g. `--only 'button--*'` |
+| `out-dir` | `.pixelgate` | the config's `outDir` |
+| `artifact-name` | `pixelgate` | one per job; also keeps the jobs' comments apart |
+| `comment` | `true` | a passing run with no earlier comment posts nothing |
+| `images-branch` | | branch for the comment's screenshots; empty = no images |
+| `fail` | `true` | fail the step when the gate fails |
+| `github-token` | `github.token` | |
+
+Outputs: `result` (`pass`, `fail`, `error`) and `artifact-url`.
+
+**Accepting a change.** CI renders on Linux; your machine may not. The comment
+prints a command like this one, to run in the project:
+
+```sh
+d=$(mktemp -d) && gh run download <run-id> -R <owner>/<repo> -n pixelgate -D "$d" \
+  && npx --no pixelgate approve --from "$d"
+```
+
+It downloads the artifact and copies its screenshots into
+`.pixelgate/baseline/<target>-linux/`. Commit and push; the next run passes.
+The first run on a platform works the same way: every snapshot is `added`, the
+gate fails, and you accept from the comment.
+
+- Images in the comment come from `raw.githubusercontent.com`, so they render
+  for public repositories only. Private repositories still get the table and
+  the report artifact. The images branch only grows; delete it any time.
+- Pull requests from forks get a read-only token: no comment and no images
+  (both are warnings), the gate itself still runs.
+- Other CI: `pixelgate run --ci`, keep `.pixelgate` as an artifact, and
+  `pixelgate summary` prints the same Markdown for any comment API.
+
+This repository gates `test/fixtures/vite-app` with its own action:
+[`.github/workflows/visual.yml`](.github/workflows/visual.yml).
 
 ## Programmatic API
 
@@ -321,7 +379,6 @@ opens the bumps weekly; `deps:check` must be clean before a release.
 ## Roadmap
 
 - accessibility checks (axe-core) in the same render pass
-- GitHub status check and PR comment with the changed snapshots
 - DOM-snapshot capture inside Playwright/Cypress tests, rendered in several browsers
 - remote render workers for a browser x viewport matrix
 - MCP server so agents can run, read and approve without parsing files
