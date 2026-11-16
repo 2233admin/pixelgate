@@ -76,6 +76,7 @@ async function runAgainst(cfg: ResolvedConfig, opts: RunOptions, baseUrl: string
         stableTimeoutMs: cfg.stabilize.stableTimeoutMs,
       });
       if (c.pageErrors.length) r.pageErrors = c.pageErrors;
+      if (c.blocked?.length) r.blocked = c.blocked;
       results.push(r);
       opts.onProgress?.(r);
     },

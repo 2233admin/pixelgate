@@ -35,6 +35,7 @@ export function storiesFromIndex(index: StorybookIndex, source: StorybookSource)
       url: `${base}/iframe.html?id=${encodeURIComponent(e.id)}&viewMode=story`,
       selector: source.selector ?? '#storybook-root',
       fullPage: false,
+      ...(source.mask?.length ? { mask: source.mask } : {}),
     }));
 }
 
