@@ -36,6 +36,7 @@ export function storiesFromIndex(index: StorybookIndex, source: StorybookSource)
       selector: source.selector ?? '#storybook-root',
       fullPage: false,
       ...(source.mask?.length ? { mask: source.mask } : {}),
+      ...(source.ariaSnapshot !== undefined ? { ariaSnapshot: source.ariaSnapshot } : {}),
     }));
 }
 

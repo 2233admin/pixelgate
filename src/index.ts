@@ -17,8 +17,17 @@ export {
   type PixelmatchOptions,
   type SsimOptions,
 } from './compare.js';
-export { captureAll, stableShot, STABILIZE_CSS, type CaptureResult, type StableShot } from './capture.js';
+export { captureAll, captureAria, stableShot, STABILIZE_CSS, type CaptureResult, type StableShot } from './capture.js';
 export { determineOutcome, applyOutcome, toResult, type Outcome } from './outcome.js';
+export {
+  normalizeAria,
+  determineAriaOutcome,
+  applyAriaOutcome,
+  ariaResult,
+  withAria,
+  ARIA_EXT,
+  type AriaOutcome,
+} from './aria.js';
 export { safeName, resolveUrl } from './names.js';
 export { storiesFromIndex, fetchStorybookPages } from './storybook.js';
 export { startVite, type RunningServer } from './vite.js';
@@ -34,6 +43,7 @@ export {
   type Report,
   type SnapshotResult,
   type A11yViolation,
+  type AriaResult,
   type ApproveOptions,
   type OutDir,
 } from './report.js';

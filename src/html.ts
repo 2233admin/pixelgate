@@ -37,6 +37,10 @@ img { max-width:100%; display:block; border:1px solid var(--line); background:re
 input[type=range] { width:100%; }
 .err { color:var(--error); padding:8px 12px; white-space:pre-wrap; font-family:ui-monospace, monospace; font-size:12px; }
 .empty { color:var(--muted); }
+.aria { padding:8px 12px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); }
+.aria a { color:inherit; }
+.patch { margin:0; padding:8px 12px; overflow:auto; font:12px/1.4 ui-monospace, monospace; border-top:1px solid var(--line); }
+.patch .add { color:var(--added); } .patch .del { color:var(--changed); }
 </style>
 </head>
 <body>
@@ -107,8 +111,23 @@ function card(r) {
     ])));
     c.append(el('div', { class: 'err', text: 'accessibility violations:' }), list);
   }
-  if (r.status === 'changed' && view === 'slider') c.append(slider(r));
-  else if (r.status === 'changed' && view === 'diff') c.append(el('div', { class: 'imgs' }, [figure('diff', r.diff)]));
+  if (r.aria && r.aria.status !== 'unchanged') {
+    const file = r.aria.current || r.aria.baseline;
+    c.append(el('div', { class: 'aria' }, [
+      document.createTextNode('ARIA snapshot: ' + r.aria.status + (r.aria.truncated ? ' (diff truncated)' : '') + (file ? ' - ' : '')),
+      ...(file ? [el('a', { href: src(file), text: file })] : []),
+    ]));
+    if (r.aria.patch) {
+      let hunk = false;
+      c.append(el('pre', { class: 'patch' }, r.aria.patch.split('\\n').map((l) => {
+        if (l.startsWith('@@')) hunk = true;
+        return el('span', { class: hunk && l[0] === '+' ? 'add' : hunk && l[0] === '-' ? 'del' : '', text: l + '\\n' });
+      })));
+    }
+  }
+  // A row changed only in its ARIA tree has no current screenshot or diff.
+  if (r.current && r.status === 'changed' && view === 'slider') c.append(slider(r));
+  else if (r.diff && r.status === 'changed' && view === 'diff') c.append(el('div', { class: 'imgs' }, [figure('diff', r.diff)]));
   else {
     const figs = [];
     if (r.baseline) figs.push(figure('baseline', r.baseline));

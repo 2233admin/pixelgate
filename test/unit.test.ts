@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { encode as encodePng } from 'fast-png';
 import { describe, it } from 'vitest';
+import { ariaResult, determineAriaOutcome, normalizeAria, patchDelta, withAria } from '../src/aria.js';
 import { allowList, isAllowed, maskSelectors, stableShot } from '../src/capture.js';
 import {
   compareImages,
@@ -571,5 +572,67 @@ describe('checks config, summary and markdown', () => {
     const old = { ...buildReport([{ target: 't', name: 'a', status: 'changed' as const }], ['changed']) };
     for (const k of ['pageErrors', 'a11y', 'overflow'] as const) delete (old.summary as Partial<typeof old.summary>)[k];
     assert.doesNotMatch(renderMarkdown(old), /Checks/);
+  });
+});
+
+describe('ARIA snapshots: normalise, outcome, patch, status, markdown', () => {
+  it('normalizeAria: CRLF, trailing spaces and trailing blank lines do not count', () => {
+    assert.equal(normalizeAria('- a  \r\n- b\r\n\r\n'), '- a\n- b\n');
+  });
+
+  it('determineAriaOutcome follows the update modes', () => {
+    const a = '- button "Ok"\n';
+    assert.deepEqual(determineAriaOutcome(a, null, 'none'), { type: 'missing-reference', location: 'current', actual: a });
+    assert.deepEqual(determineAriaOutcome(a, null, 'new'), { type: 'missing-reference', location: 'baseline', actual: a });
+    assert.equal(determineAriaOutcome(a, '- button "Ok"\r\n', 'none').type, 'matched');
+    assert.equal(determineAriaOutcome(a, '- button "No"\n', 'new').type, 'mismatch');
+    assert.equal(determineAriaOutcome(a, '- button "No"\n', 'all').type, 'update-reference');
+  });
+
+  it('ariaResult: a mismatch carries a unified diff; a long one is cut short', () => {
+    const o = { outDir: path.resolve('out') };
+    const paths = { baseline: path.join(o.outDir, 'baseline', 't', 'a.aria.yml'), current: path.join(o.outDir, 'current', 't', 'a.aria.yml') };
+    const r = ariaResult({ type: 'mismatch', actual: '- button "Yes"\n' }, { o, paths, reference: '- button "No"\n' });
+    assert.deepEqual([r.status, r.baseline, r.current], ['changed', 'baseline/t/a.aria.yml', 'current/t/a.aria.yml']);
+    assert.match(r.patch!, /^--- baseline\/a\.aria\.yml$/m);
+    assert.match(r.patch!, /^-- button "No"$/m);
+    assert.match(r.patch!, /^\+- button "Yes"$/m);
+    assert.deepEqual(patchDelta(r.patch!), { added: 1, removed: 1 });
+    assert.equal(r.truncated, undefined);
+    const many = (p: string) => Array.from({ length: 500 }, (_, i) => `- ${p} ${i}`).join('\n') + '\n';
+    const big = ariaResult({ type: 'mismatch', actual: many('y') }, { o, paths, reference: many('x') });
+    assert.equal(big.truncated, true);
+    assert.ok(big.patch!.split('\n').length <= 200);
+  });
+
+  it('withAria folds the more serious status into the row', () => {
+    const row = (status: SnapshotResult['status']): SnapshotResult => ({ target: 't', name: 'a', status });
+    assert.equal(withAria(row('unchanged'), { status: 'changed' }).status, 'changed');
+    assert.equal(withAria(row('unchanged'), { status: 'added' }).status, 'added');
+    assert.equal(withAria(row('changed'), { status: 'added' }).status, 'changed');
+    assert.equal(withAria(row('error'), { status: 'changed' }).status, 'error');
+    assert.equal(withAria(row('unchanged'), { status: 'removed' }).status, 'unchanged');
+  });
+
+  it('markdown: a tree-only change says so, shows the screenshot as unchanged and the diff in a long-enough fence', () => {
+    const patch = '--- baseline/home.aria.yml\n+++ current/home.aria.yml\n@@ -1 +1 @@\n-- button "No ```"\n+- button "Yes"';
+    const report = buildReport(
+      [
+        {
+          target: 't',
+          name: 'home',
+          status: 'changed',
+          baseline: 'baseline/t/home.png',
+          aria: { status: 'changed', baseline: 'baseline/t/home.aria.yml', current: 'current/t/home.aria.yml', patch },
+        },
+      ],
+      ['changed'],
+    );
+    const md = renderMarkdown(report, { imageBaseUrl: 'https://img.example/' });
+    assert.match(md, /\| changed \| `home` \| `t` \| ARIA tree \+1 -1 lines \|/);
+    assert.match(md, /<summary>ARIA snapshot changes<\/summary>/);
+    assert.match(md, /^````diff$/m);
+    assert.match(md, /alt="Screenshot \(pixels unchanged\)"/);
+    assert.doesNotMatch(md, /alt="Current"/);
   });
 });

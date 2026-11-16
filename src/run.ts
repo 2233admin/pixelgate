@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { applyAriaOutcome, ARIA_EXT, ariaResult, determineAriaOutcome, withAria } from './aria.js';
 import { captureAll, type CaptureResult } from './capture.js';
 import { createMatcher, type Matcher } from './compare.js';
 import type { PageSnap, ResolvedConfig } from './config.js';
@@ -49,6 +50,8 @@ async function runAgainst(cfg: ResolvedConfig, opts: RunOptions, baseUrl: string
   const ext = `.${cfg.codec.extension}`;
   const results: SnapshotResult[] = [];
   const seen = new Set<string>();
+  /** `<targetDir>/<safeName>` of snapshots whose `.aria.yml` this run accounts for. */
+  const seenAria = new Set<string>();
 
   await captureAll(cfg, snaps, matcher, {
     reference: (dir, name) => readIfExists(baselinePath(cfg, dir, name, ext)),
@@ -79,6 +82,16 @@ async function runAgainst(cfg: ResolvedConfig, opts: RunOptions, baseUrl: string
       if (c.blocked?.length) r.blocked = c.blocked;
       if (c.a11y?.length) r.a11y = c.a11y;
       if (c.overflowPx) r.overflowPx = c.overflowPx;
+      // A failed capture proves nothing about its ARIA baseline: neither compared nor orphaned.
+      if (r.status === 'error') seenAria.add(`${c.target}/${safeName(c.name)}`);
+      else if (c.aria !== undefined) {
+        seenAria.add(`${c.target}/${safeName(c.name)}`);
+        const ariaPaths = { baseline: baselinePath(cfg, c.target, c.name, ARIA_EXT), current: currentPath(cfg, c.target, c.name, ARIA_EXT) };
+        const reference = existsSync(ariaPaths.baseline) ? await readFile(ariaPaths.baseline, 'utf8') : null;
+        const ariaOutcome = determineAriaOutcome(c.aria, reference, cfg.update);
+        await applyAriaOutcome(ariaOutcome, ariaPaths);
+        withAria(r, ariaResult(ariaOutcome, { o: cfg, paths: ariaPaths, reference }));
+      }
       results.push(r);
       opts.onProgress?.(r);
     },
@@ -89,10 +102,22 @@ async function runAgainst(cfg: ResolvedConfig, opts: RunOptions, baseUrl: string
     for (const t of cfg.targets) {
       const dir = path.join(cfg.outDir, 'baseline', t.dir);
       if (!existsSync(dir)) continue;
-      for (const f of await readdir(dir)) {
-        if (f.endsWith(ext) && !seen.has(`${t.dir}/${f}`)) {
+      const files = await readdir(dir);
+      for (const f of files) {
+        if (f.endsWith(ext) && !f.endsWith(ARIA_EXT) && !seen.has(`${t.dir}/${f}`)) {
           results.push({ target: t.dir, name: f.slice(0, -ext.length), status: 'removed', baseline: rel(cfg, path.join(dir, f)) });
         }
+      }
+      // `.aria.yml` with no ARIA snapshot this run: on its snapshot's row (removed, or live with
+      // `ariaSnapshot` now off), or a row of its own when there is no screenshot either.
+      for (const f of files) {
+        if (!f.endsWith(ARIA_EXT)) continue;
+        const stem = f.slice(0, -ARIA_EXT.length);
+        if (seenAria.has(`${t.dir}/${stem}`)) continue;
+        const aria = { status: 'removed' as const, baseline: rel(cfg, path.join(dir, f)) };
+        const row = results.find((r) => r.target === t.dir && safeName(r.name) === stem);
+        if (row) row.aria = aria;
+        else results.push({ target: t.dir, name: stem, status: 'removed', aria });
       }
     }
   }

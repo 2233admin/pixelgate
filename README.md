@@ -143,6 +143,7 @@ platform's baselines from a CI run (`--ci` leaves them in `current/`, then
 ```
 .pixelgate/
   baseline/<target>-<platform>/<name>.png   # commit this
+  baseline/<target>-<platform>/<name>.aria.yml  # with `ariaSnapshot`: commit this too
   current/<target>-<platform>/<name>.png    # last run, git-ignored
   diff/<target>-<platform>/<name>.png       # red = changed pixels, git-ignored
   report/index.html              # open in a browser: side by side, diff, slider
@@ -384,6 +385,55 @@ a check on, look at what it finds, and then make it gate. `approve` accepts
 pixels, not findings: an approved snapshot that still has a gating finding
 keeps the run failing until the page is fixed.
 
+## ARIA snapshots
+
+A screenshot shows what the page looks like. An ARIA snapshot records what a
+screen reader gets from it: roles, accessible names, states and text, as YAML
+(Playwright's `ariaSnapshot()`). Turn it on and every snapshot keeps a
+`<name>.aria.yml` baseline next to its screenshot (Happo: ARIA snapshots):
+
+```ts
+export default defineConfig({
+  ariaSnapshot: true,
+  targets: {
+    desktop: { viewport: '1280x720' },
+    firefox: { browser: 'firefox', ariaSnapshot: false }, // per target
+  },
+  pages: [{ name: 'home', url: '/', ariaSnapshot: false }], // per page; the most specific wins
+});
+```
+
+```yaml
+# .pixelgate/baseline/desktop-linux/home.aria.yml
+- heading "Title" [level=1]
+- button "Close": x
+- paragraph: Now
+```
+
+- The tree is compared as text, exactly: no thresholds, no partial or regex
+  matching. A changed tree marks the snapshot `changed` even when its pixels
+  are identical (a renamed button, a lost label, a different heading level).
+- It follows the baseline modes of the screenshots: `added` without a
+  baseline, `updated` with `-u`, nothing written in CI. Turning it on for an
+  existing suite therefore fails CI as `added` until the `.aria.yml` files are
+  approved (locally, or with `approve --from` and the CI artifact).
+- The review page, the pull-request comment and the CLI show the unified diff
+  (cut at about 200 lines; the whole tree is in the `.aria.yml`).
+- `approve` accepts the screenshot and its ARIA snapshot together. A
+  `.aria.yml` with no ARIA snapshot in a run (turned off, or the snapshot is
+  gone) is reported as `removed`; `approve --prune` deletes it.
+- A `selector` snapshot records the element the screenshot captured (the
+  first match). `data-pixelgate-hide` and masked elements are left out of the
+  tree, as they are left out of the pixels.
+
+pixelgate writes LF and ignores CRLF when it compares, so a Windows checkout
+with `core.autocrlf` still matches. To keep the files LF in the working tree
+too, add to `.gitattributes`:
+
+```
+*.aria.yml text eol=lf
+```
+
 ## CI and pull requests
 
 This repository is also a GitHub Action. On a pull request it runs the gate,
@@ -482,7 +532,6 @@ opens the bumps weekly; `deps:check` must be clean before a release.
 
 Happo parity status and the next slices: [docs/happo-parity.md](docs/happo-parity.md).
 
-- accessibility checks (axe-core) in the same render pass
 - DOM-snapshot capture inside Playwright/Cypress tests, rendered in several browsers
 - remote render workers for a browser x viewport matrix
 - MCP server so agents can run, read and approve without parsing files
