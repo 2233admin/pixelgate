@@ -13,7 +13,7 @@
   },
   "type": "module",
   "bin": {
-    "pixelgate": "./dist/cli.js"
+    "pixelgate": "dist/cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

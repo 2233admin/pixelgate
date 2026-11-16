@@ -87,7 +87,15 @@ const CHECK_LABEL: Record<CheckName, string> = {
   pageErrors: 'with page errors',
   a11y: 'with accessibility violations',
   overflow: 'overflowing the viewport',
+  consoleErrors: 'with console errors',
+  httpErrors: 'with failed requests',
 };
+
+/** The first line of the first of `total` items, shortened; `(+n more)` for the rest. */
+function firstOf(first: string, total: number): string {
+  const line = first.split('\n')[0]!;
+  return (line.length > 150 ? line.slice(0, 149) + '…' : line) + (total > 1 ? ` (+${total - 1} more)` : '');
+}
 
 function headline(report: Report, id?: string): string[] {
   const s = report.summary;
@@ -105,10 +113,11 @@ function headline(report: Report, id?: string): string[] {
 
 function checkDetail(r: SnapshotResult, c: CheckName): string {
   if (c === 'overflow') return `${r.overflowPx}px past the right edge`;
-  if (c === 'pageErrors') {
-    const first = r.pageErrors![0]!.split('\n')[0]!;
-    const more = r.pageErrors!.length > 1 ? ` (+${r.pageErrors!.length - 1} more)` : '';
-    return (first.length > 150 ? first.slice(0, 149) + '…' : first) + more;
+  if (c === 'pageErrors') return firstOf(r.pageErrors![0]!, r.pageErrors!.length);
+  if (c === 'consoleErrors') return firstOf(r.consoleErrors![0]!, r.consoleErrors!.length + (r.consoleErrorsDropped ?? 0));
+  if (c === 'httpErrors') {
+    const h = r.httpErrors![0]!;
+    return firstOf(`${h.status ?? h.failure} ${h.method} ${h.url}`, r.httpErrors!.length + (r.httpErrorsDropped ?? 0));
   }
   const v = r.a11y!;
   const ids = v.slice(0, 4).map((x) => `${code(x.id)}${x.impact ? ` (${x.impact})` : ''}`);

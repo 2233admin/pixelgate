@@ -2,8 +2,8 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, firefox, webkit, type Browser, type BrowserContext, type BrowserType, type Locator, type Page } from 'playwright';
 import { normalizeAria } from './aria.js';
 import { pngCodec, type Codec, type Matcher } from './compare.js';
-import { HIDE_ATTR, IMPACTS, type A11yOptions, type PageSnap, type ResolvedConfig, type ResolvedTarget } from './config.js';
-import type { A11yViolation } from './report.js';
+import { HIDE_ATTR, IMPACTS, type A11yOptions, type PageSnap, type ResolvedChecks, type ResolvedConfig, type ResolvedTarget } from './config.js';
+import type { A11yViolation, HttpError } from './report.js';
 import { safeName } from './names.js';
 import { matchesAny } from './storybook.js';
 
@@ -89,6 +89,10 @@ export interface CaptureResult {
   error?: string;
   /** Uncaught page errors seen while rendering. */
   pageErrors: string[];
+  /** Console errors while rendering (`checks.consoleErrors`). */
+  consoleErrors?: string[];
+  /** Failed requests while rendering (`checks.httpErrors`). */
+  httpErrors?: HttpError[];
   /** Hostnames whose requests `allowedHostnames` blocked while rendering. */
   blocked?: string[];
   a11y?: A11yViolation[];
@@ -467,6 +471,61 @@ export interface CaptureHooks {
   onCapture(result: CaptureResult): Promise<void>;
 }
 
+/** What a page reported while it rendered: uncaught errors always, the rest when its check is on. */
+export interface PageLog {
+  pageErrors: string[];
+  consoleErrors: string[];
+  httpErrors: HttpError[];
+}
+
+/** Requests the page itself gave up on (navigation, cancelled loads), per engine: not errors. */
+const CANCELLED = ['net::ERR_ABORTED', 'NS_BINDING_ABORTED', 'cancelled', 'Load request cancelled'];
+
+/**
+ * Listen to a page for the checks that need no baseline. Each list grows for the life of the
+ * page; `blockedHosts` are hosts `allowedHostnames` blocks, whose failed requests are expected.
+ */
+export function watchPage(page: Page, checks: ResolvedChecks, blockedHosts?: Set<string>): PageLog {
+  const log: PageLog = { pageErrors: [], consoleErrors: [], httpErrors: [] };
+  page.on('pageerror', (e) => log.pageErrors.push(e.message));
+  const { consoleErrors, httpErrors } = checks;
+  if (consoleErrors) {
+    page.on('console', (m) => {
+      if (m.type() !== 'error') return;
+      const text = m.text();
+      // Chromium logs every failed load as a console error too: `httpErrors` reports those.
+      if (httpErrors && text.startsWith('Failed to load resource:')) return;
+      const at = m.location().url;
+      const line = at ? `${text} (${at})` : text;
+      if (!consoleErrors.ignore.some((s) => line.includes(s))) log.consoleErrors.push(line);
+    });
+  }
+  if (httpErrors) {
+    const add = (e: HttpError) => {
+      if (!httpErrors.ignore.some((s) => e.url.includes(s))) log.httpErrors.push(e);
+    };
+    page.on('response', (res) => {
+      if (res.status() < 400) return;
+      const url = res.url();
+      // Browsers ask for one whether or not the page links it.
+      if (res.status() === 404 && /^https?:\/\/[^/]+\/favicon\.ico(?:[?#]|$)/.test(url)) return;
+      const req = res.request();
+      add({ url, method: req.method(), resourceType: req.resourceType(), status: res.status() });
+    });
+    page.on('requestfailed', (req) => {
+      const failure = req.failure()?.errorText ?? 'failed';
+      if (CANCELLED.includes(failure)) return;
+      try {
+        if (blockedHosts?.has(bareHost(new URL(req.url()).hostname))) return;
+      } catch {
+        // Not a URL with a host (data:, blob:): reported.
+      }
+      add({ url: req.url(), method: req.method(), resourceType: req.resourceType(), failure });
+    });
+  }
+  return log;
+}
+
 async function newContext(browser: Browser, target: ResolvedTarget, allow: string[] | undefined): Promise<{
   context: BrowserContext;
   blocked: Map<Page, Set<string>>;
@@ -554,10 +613,9 @@ export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], matcher
       const { context, blocked } = ctx;
       await pool(snaps, cfg.concurrency, async (snap) => {
         const page = await context.newPage();
-        const pageErrors: string[] = [];
-        page.on('pageerror', (e) => pageErrors.push(e.message));
         const hosts = new Set<string>();
         blocked.set(page, hosts);
+        const log = watchPage(page, target.checks, hosts);
         // WebSockets bypass `context.route`; give them the same allowlist.
         if (allow) {
           await page.routeWebSocket(
@@ -574,7 +632,7 @@ export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], matcher
           );
         }
         const reference = await hooks.reference(target.dir, snap.name);
-        const r: CaptureResult = { target: target.dir, name: snap.name, reference, pageErrors };
+        const r: CaptureResult = { target: target.dir, name: snap.name, reference, ...log };
         try {
           await navigate(page, snap, cfg);
           const { unreadableStylesheets } = await settle(page, snap, cfg);

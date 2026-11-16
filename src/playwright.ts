@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test as base, type Locator, type TestInfo } from '@playwright/test';
-import { settle, shoot, type CaptureResult, type CaptureSnap } from './capture.js';
+import { settle, shoot, watchPage, type CaptureResult, type CaptureSnap } from './capture.js';
 import { createMatcher } from './compare.js';
 import type { ResolvedConfig } from './config.js';
 import { ATTACHMENT, configFor, type PixelgateAttachment, type PixelgateOptions } from './playwright-shared.js';
@@ -77,9 +77,9 @@ export const test = base.extend<{ pixelgateOptions: PixelgateOptions; pixelgate:
     const target = cfg.targets[0]!;
     const matcher = createMatcher({ codec: cfg.codec, comparator: cfg.comparator.fn, options: cfg.comparator.options });
     const ext = `.${cfg.codec.extension}`;
-    const pageErrors: string[] = [];
-    page.on('pageerror', (e) => pageErrors.push(e.message));
-    let reported = 0;
+    const log = watchPage(page, target.checks);
+    // What each list held at the previous screenshot of this test.
+    const reported = { pageErrors: 0, consoleErrors: 0, httpErrors: 0 };
     const names = new Set<string>();
 
     await use({
@@ -107,9 +107,13 @@ export const test = base.extend<{ pixelgateOptions: PixelgateOptions; pixelgate:
         } catch (e) {
           c.error = firstLine(e);
         }
-        // Page errors since the previous screenshot of this test.
-        c.pageErrors = pageErrors.slice(reported);
-        reported = pageErrors.length;
+        // What the page reported since the previous screenshot of this test.
+        c.pageErrors = log.pageErrors.slice(reported.pageErrors);
+        c.consoleErrors = log.consoleErrors.slice(reported.consoleErrors);
+        c.httpErrors = log.httpErrors.slice(reported.httpErrors);
+        reported.pageErrors = log.pageErrors.length;
+        reported.consoleErrors = log.consoleErrors.length;
+        reported.httpErrors = log.httpErrors.length;
         const r = await recordCapture(cfg, c, matcher.compare);
         const data: PixelgateAttachment = { outDir: cfg.outDir, failOn: cfg.failOn, result: r };
         await info.attach(ATTACHMENT, { body: JSON.stringify(data), contentType: 'application/json' });

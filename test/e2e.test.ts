@@ -83,6 +83,9 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     lastHeaders = req.headers;
     if (req.url === '/ext.css') return void res.writeHead(200, { 'content-type': 'text/css' }).end('.x { background: #ff0000; }');
+    // Failed requests for checks.httpErrors.
+    if (/^\/(?:missing|m\d+)\.png$/.test(req.url ?? '')) return void res.writeHead(404).end();
+    if (req.url === '/api-500') return void res.writeHead(500).end();
     const routes: Record<string, () => string> = {
       '/ticker': () => ticker,
       '/settle': () => settle,
@@ -106,6 +109,9 @@ button { border: 0; width: 60px; height: 30px; margin: 0; display: block; }
 <div class="card"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="40" height="40"></div></body></html>`,
       '/wide': () => `<!doctype html><body style="margin:0"><div style="width:900px;height:10px;background:#000"></div></body>`,
       '/boom': () => `<!doctype html><body style="margin:0"><script>throw new Error('boom')</script></body>`,
+      '/noisy': () => `<!doctype html><body style="margin:0"><img src="/missing.png"><img src="/missing.png">
+<script>console.error('boom-console'); console.warn('only a warning'); fetch('/api-500');</script></body>`,
+      '/many': () => `<!doctype html><body style="margin:0">${Array.from({ length: 25 }, (_, i) => `<img src="/m${i}.png">`).join('')}</body>`,
       '/external': external,
       '/ws': () => `<!doctype html><body style="margin:0">
 <script>window.sock = new WebSocket('ws://localhost:${port}/sock');</script></body>`,
@@ -378,6 +384,50 @@ describe('checks without a baseline: a11y, overflow, page errors', () => {
     assert.equal(reportOnly.failed, false);
     const gated = await run(at('.pg-boom-gate', '/boom', { failOn: ['changed', 'error', 'pageErrors'] }));
     assert.equal(gated.failed, true);
+  });
+
+  it('consoleErrors and httpErrors: off by default; on, they report errors and failed requests once each', async () => {
+    const off = await run(at('.pg-noisy-off', '/noisy'));
+    assert.equal(off.results[0]!.consoleErrors, undefined);
+    assert.equal(off.results[0]!.httpErrors, undefined);
+    assert.equal(off.summary.consoleErrors + off.summary.httpErrors, 0);
+
+    const on = await run(at('.pg-noisy', '/noisy', { checks: { consoleErrors: true, httpErrors: true } }));
+    const r = on.results[0]!;
+    // Chromium's own "Failed to load resource" console lines are left to httpErrors; warnings are not errors.
+    assert.deepEqual(r.consoleErrors, [`boom-console (${origin}/noisy)`], JSON.stringify(r));
+    const http = (r.httpErrors ?? []).map((h) => `${h.status} ${h.method} ${h.resourceType} ${new URL(h.url).pathname}`).sort();
+    assert.deepEqual(http, ['404 GET image /missing.png', '500 GET fetch /api-500'], JSON.stringify(r));
+    assert.deepEqual([on.summary.consoleErrors, on.summary.httpErrors], [1, 1]);
+    assert.equal(on.failed, false, 'reported only, until failOn lists them');
+
+    const gated = await run(at('.pg-noisy-gate', '/noisy', { checks: { httpErrors: true }, failOn: ['changed', 'error', 'httpErrors'] }));
+    assert.equal(gated.failed, true);
+  });
+
+  it('consoleErrors without httpErrors keeps the browser\'s failed-load lines; ignore drops matches', async () => {
+    const consoleOnly = await run(at('.pg-noisy-console', '/noisy', { checks: { consoleErrors: true } }));
+    const lines = consoleOnly.results[0]!.consoleErrors ?? [];
+    assert.ok(lines.some((l) => l.startsWith('Failed to load resource:')), JSON.stringify(lines));
+
+    const ignored = await run(
+      at('.pg-noisy-ignore', '/noisy', { checks: { consoleErrors: { ignore: ['boom-console'] }, httpErrors: { ignore: ['/missing.png'] } } }),
+    );
+    const r = ignored.results[0]!;
+    assert.equal(r.consoleErrors, undefined, JSON.stringify(r));
+    assert.deepEqual(r.httpErrors?.map((h) => h.status), [500], JSON.stringify(r));
+  });
+
+  it('httpErrors: at most MAX_LOGGED distinct requests per snapshot, the rest counted', async () => {
+    const r = (await run(at('.pg-many', '/many', { checks: { httpErrors: true } }))).results[0]!;
+    assert.equal(r.httpErrors?.length, 20, JSON.stringify(r));
+    assert.equal(r.httpErrorsDropped, 5);
+  });
+
+  it('httpErrors leaves out requests allowedHostnames blocks: those are reported as blocked', async () => {
+    const r = (await run(at('.pg-http-blocked', '/external', { checks: { httpErrors: true }, allowedHostnames: [] }))).results[0]!;
+    assert.deepEqual(r.blocked, ['localhost']);
+    assert.equal(r.httpErrors, undefined, JSON.stringify(r));
   });
 
   it('approve accepts the pixels but not the findings: a gating check still fails', async () => {

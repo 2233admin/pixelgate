@@ -458,17 +458,20 @@ Grown crops and capped screenshots are clips of the full page: unlike a plain
 element screenshot they do not scroll the element into view first, so sticky
 headers and lazy content render as they do at the top of the page.
 
-## Checks: accessibility, overflow, page errors
+## Checks: accessibility, overflow, errors
 
 Some problems need no baseline to be problems. pixelgate can check every
 snapshot for them, right after its screenshot (Happo: accessibility targets,
-`detectHorizontalOverflow`, render errors):
+`detectHorizontalOverflow`, render errors; Bombadil's default properties:
+console errors, HTTP errors):
 
 ```ts
 export default defineConfig({
   checks: {
     a11y: true, // axe-core, WCAG 2.0 + 2.1 A/AA
     // a11y: { tags: ['wcag22aa'], disableRules: ['color-contrast'], minImpact: 'serious' },
+    consoleErrors: true,
+    httpErrors: { ignore: ['/analytics/'] }, // leave out URLs containing these
   },
   targets: {
     desktop: { viewport: '1280x720' },
@@ -482,12 +485,24 @@ export default defineConfig({
 | --- | --- | --- |
 | `a11y` | axe-core rule violations; for a `selector` snapshot, in the element the screenshot captured | `a11y`: rule id, impact, help link, element count, first selectors |
 | `overflow` | a page wider than the viewport, i.e. one that scrolls sideways | `overflowPx`: how far past the right edge |
-| page errors | uncaught exceptions while rendering (always collected) | `pageErrors` |
+| page errors | uncaught exceptions and unhandled promise rejections while rendering (always collected) | `pageErrors` |
+| `consoleErrors` | `console.error` and other error-level console messages while rendering | `consoleErrors`: message and the URL that logged it |
+| `httpErrors` | responses with status 400 or more, and requests that got no response (`net::ERR_*`), while rendering | `httpErrors`: status or failure, method, URL, resource type |
+
+`consoleErrors` and `httpErrors` take `true` or `{ ignore: [...] }`: findings
+containing one of those strings (the message, or the request URL) are left
+out. Each keeps at most 20 distinct findings per snapshot and counts the rest.
+`httpErrors` leaves out requests the page cancelled itself, requests
+`allowedHostnames` blocked (reported as blocked), and a missing
+`/favicon.ico`. With `httpErrors` on, Chromium's own "Failed to load
+resource" console lines are left to it, so a 404 counts once.
 
 Findings are counted in the summary (`summary.a11y`, `summary.overflow`,
-`summary.pageErrors`) and shown on the review page (filter "Checks"), in the
-CLI output and in the pull-request comment. They fail the run only when
-`failOn` lists them (`'a11y'`, `'overflow'`, `'pageErrors'`), so you can turn
+`summary.pageErrors`, `summary.consoleErrors`, `summary.httpErrors`) and shown
+on the review page (filter "Checks"), in the CLI output and in the
+pull-request comment. They fail the run only when `failOn` lists them
+(`'a11y'`, `'overflow'`, `'pageErrors'`, `'consoleErrors'`,
+`'httpErrors'`), so you can turn
 a check on, look at what it finds, and then make it gate. `approve` accepts
 pixels, not findings: an approved snapshot that still has a gating finding
 keeps the run failing until the page is fixed.
@@ -647,7 +662,8 @@ Happo parity status and the next slices: [docs/happo-parity.md](docs/happo-parit
 
 [Happo](https://happo.io) (its MIT client inspired the config model and
 DOM-snapshot approach), Playwright `toHaveScreenshot`, Lost Pixel, Argos,
-reg-suit, BackstopJS. Diffing uses [pixelmatch](https://github.com/mapbox/pixelmatch).
+reg-suit, BackstopJS. [Bombadil](https://github.com/antithesishq/bombadil)'s
+default properties inspired the console and HTTP error checks. Diffing uses [pixelmatch](https://github.com/mapbox/pixelmatch).
 
 ## License
 

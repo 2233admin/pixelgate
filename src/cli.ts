@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { findConfigFile, loadConfig } from './config.js';
+import { CHECKS, findConfigFile, loadConfig } from './config.js';
 import { renderMarkdown } from './markdown.js';
 import { approve, readReport, reportDir, type OutDir } from './report.js';
 import { run } from './run.js';
@@ -90,6 +90,8 @@ async function main(argv: string[]): Promise<number> {
           r.pageErrors?.length && `page errors ${r.pageErrors.length}`,
           r.a11y?.length && `a11y ${r.a11y.map((v) => v.id).join(',')}`,
           r.overflowPx && `overflow ${r.overflowPx}px`,
+          r.consoleErrors?.length && `console errors ${r.consoleErrors.length + (r.consoleErrorsDropped ?? 0)}`,
+          r.httpErrors?.length && `failed requests ${r.httpErrors.length + (r.httpErrorsDropped ?? 0)}`,
           r.aria && r.aria.status !== 'unchanged' && `aria ${r.aria.status}`,
           r.capped && `capped from ${r.capped.width}x${r.capped.height}`,
         ].filter(Boolean);
@@ -99,8 +101,8 @@ async function main(argv: string[]): Promise<number> {
     const s = report.summary;
     log(
       `\n${report.failed ? 'FAIL' : 'PASS'}  total ${s.total}  changed ${s.changed}  added ${s.added}  updated ${s.updated}  removed ${s.removed}  error ${s.error}  unchanged ${s.unchanged}` +
-        (s.pageErrors + s.a11y + s.overflow > 0
-          ? `\nchecks  pageErrors ${s.pageErrors}  a11y ${s.a11y}  overflow ${s.overflow}  (failOn: ${report.failOn.join(', ')})`
+        (CHECKS.some((c) => s[c] > 0)
+          ? `\nchecks  ${CHECKS.map((c) => `${c} ${s[c]}`).join('  ')}  (failOn: ${report.failOn.join(', ')})`
           : ''),
     );
     if (cfg.update === 'none' && s.added > 0) {
