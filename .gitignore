@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.pixelgate/current/
+.pixelgate/diff/
+.pixelgate/report/
+test/.tmp/

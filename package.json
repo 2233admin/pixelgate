@@ -1,0 +1,51 @@
+{
+  "name": "pixelgate",
+  "version": "0.1.0",
+  "description": "Self-hosted visual regression testing bot: Playwright capture, pixel diff, static review report, CI/agent gate.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "pixelgate": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm build"
+  },
+  "keywords": [
+    "visual-regression",
+    "screenshot",
+    "playwright",
+    "storybook",
+    "pixel-diff",
+    "ci"
+  ],
+  "dependencies": {
+    "pixelmatch": "^8.0.0",
+    "playwright": "^1.65.1",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/pngjs": "^6.0.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}
