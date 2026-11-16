@@ -42,7 +42,12 @@ jobs:
           mkdir -p "$dir" && cd "$dir"
           npm init -y > /dev/null
           npm install --no-audit --no-fund "pixelgate-cli@${VERSION}" playwright
-          npx --no pixelgate --version
-          npx --no pixelgate engine install
-          engine="$(npx --no pixelgate engine path)"
+          # `--` keeps npx from taking pixelgate's flags as its own (`--version` prints npm's version).
+          got="$(npx --no -- pixelgate --version)"
+          if [ "$got" != "$VERSION" ]; then
+            echo "::error::pixelgate --version printed '$got', expected $VERSION"
+            exit 1
+          fi
+          npx --no -- pixelgate engine install
+          engine="$(npx --no -- pixelgate engine path)"
           "$engine" --version
