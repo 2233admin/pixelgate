@@ -30,8 +30,10 @@ export {
   writeReport,
   buildReport,
   summarize,
+  checkFindings,
   type Report,
   type SnapshotResult,
+  type A11yViolation,
   type ApproveOptions,
   type OutDir,
 } from './report.js';

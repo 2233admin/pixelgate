@@ -77,6 +77,8 @@ async function runAgainst(cfg: ResolvedConfig, opts: RunOptions, baseUrl: string
       });
       if (c.pageErrors.length) r.pageErrors = c.pageErrors;
       if (c.blocked?.length) r.blocked = c.blocked;
+      if (c.a11y?.length) r.a11y = c.a11y;
+      if (c.overflowPx) r.overflowPx = c.overflowPx;
       results.push(r);
       opts.onProgress?.(r);
     },

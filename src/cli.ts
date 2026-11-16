@@ -75,11 +75,21 @@ async function main(argv: string[]): Promise<number> {
     const report = await run(cfg, {
       only: values.only,
       onServer: (url) => log(`vite: ${url}`),
-      onProgress: (r) => log(`${mark[r.status] ?? '?'} ${r.target} ${r.name}${r.error ? `  ${r.error}` : ''}`),
+      onProgress: (r) => {
+        const checks = [
+          r.pageErrors?.length && `page errors ${r.pageErrors.length}`,
+          r.a11y?.length && `a11y ${r.a11y.map((v) => v.id).join(',')}`,
+          r.overflowPx && `overflow ${r.overflowPx}px`,
+        ].filter(Boolean);
+        log(`${mark[r.status] ?? '?'} ${r.target} ${r.name}${r.error ? `  ${r.error}` : ''}${checks.length ? `  [${checks.join('; ')}]` : ''}`);
+      },
     });
     const s = report.summary;
     log(
-      `\n${report.failed ? 'FAIL' : 'PASS'}  total ${s.total}  changed ${s.changed}  added ${s.added}  updated ${s.updated}  removed ${s.removed}  error ${s.error}  unchanged ${s.unchanged}`,
+      `\n${report.failed ? 'FAIL' : 'PASS'}  total ${s.total}  changed ${s.changed}  added ${s.added}  updated ${s.updated}  removed ${s.removed}  error ${s.error}  unchanged ${s.unchanged}` +
+        (s.pageErrors + s.a11y + s.overflow > 0
+          ? `\nchecks  pageErrors ${s.pageErrors}  a11y ${s.a11y}  overflow ${s.overflow}  (failOn: ${report.failOn.join(', ')})`
+          : ''),
     );
     if (cfg.update === 'none' && s.added > 0) {
       log(

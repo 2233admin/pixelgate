@@ -7,6 +7,38 @@ import { CODECS, COMPARATORS, type Codec, type Comparator } from './compare.js';
 
 export type BrowserName = 'chromium' | 'firefox' | 'webkit';
 export type Status = 'unchanged' | 'changed' | 'added' | 'updated' | 'removed' | 'error';
+/** Findings that need no baseline. Counted in the summary; failing only when listed in `failOn`. */
+export type CheckName = 'pageErrors' | 'a11y' | 'overflow';
+/** What `failOn` can list: snapshot statuses and check findings. */
+export type FailOn = Status | CheckName;
+export type Impact = 'minor' | 'moderate' | 'serious' | 'critical';
+
+export interface A11yOptions {
+  /** axe-core rule tags to run. Default WCAG 2.0 and 2.1, levels A and AA. */
+  tags?: string[];
+  /** axe-core rule ids to skip, e.g. `color-contrast`. */
+  disableRules?: string[];
+  /** Leave out violations below this impact. Default `minor` (keep all). */
+  minImpact?: Impact;
+}
+
+/** Checks run on each snapshot after its screenshot (Happo: accessibility, detectHorizontalOverflow). */
+export interface Checks {
+  /** axe-core accessibility check, scoped to `selector` when the snapshot has one. */
+  a11y?: boolean | A11yOptions;
+  /** Measure how far the page reaches past the right edge of the viewport. */
+  overflow?: boolean;
+}
+
+export interface ResolvedChecks {
+  a11y?: Required<A11yOptions>;
+  overflow: boolean;
+}
+
+export const STATUSES: Status[] = ['unchanged', 'changed', 'added', 'updated', 'removed', 'error'];
+export const CHECKS: CheckName[] = ['pageErrors', 'a11y', 'overflow'];
+export const IMPACTS: Impact[] = ['minor', 'moderate', 'serious', 'critical'];
+const DEFAULT_A11Y_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'];
 
 /**
  * What to do with baselines (same three modes as Vitest's `updateSnapshot`):
@@ -47,6 +79,8 @@ export interface Target {
   extraHTTPHeaders?: Record<string, string>;
   /** Overrides the top-level `hideBehavior` for this target. */
   hideBehavior?: HideBehavior;
+  /** Merged over the top-level `checks`, e.g. `{ overflow: true }` only on a phone target. */
+  checks?: Checks;
 }
 
 export interface PageSnap {
@@ -157,6 +191,8 @@ export interface Config {
   stabilize?: Stabilize;
   /** What to do with `data-pixelgate-hide` elements. Default `hide`. */
   hideBehavior?: HideBehavior;
+  /** Checks that need no baseline, for every target (targets can override). Default: none. */
+  checks?: Checks;
   /**
    * Selectors painted over with a solid box in every snapshot (dynamic content you
    * cannot mark with `data-pixelgate-hide`, e.g. third-party widgets).
@@ -179,10 +215,11 @@ export interface Config {
    */
   platformSpecific?: boolean;
   /**
-   * Statuses that make `run` exit non-zero.
+   * Statuses and check findings that make `run` exit non-zero.
    * Default `['changed', 'error']`, plus `'added'` when `update` is `none`.
+   * Add `'pageErrors'`, `'a11y'` or `'overflow'` to make those checks gate too.
    */
-  failOn?: Status[];
+  failOn?: FailOn[];
 }
 
 export interface ResolvedTarget {
@@ -202,6 +239,7 @@ export interface ResolvedTarget {
   reducedMotion: 'reduce' | 'no-preference';
   extraHTTPHeaders?: Record<string, string>;
   hideBehavior: HideBehavior;
+  checks: ResolvedChecks;
 }
 
 export interface ResolvedConfig {
@@ -224,7 +262,7 @@ export interface ResolvedConfig {
   allowedHostnames?: string[];
   update: UpdateMode;
   platformSpecific: boolean;
-  failOn: Status[];
+  failOn: FailOn[];
 }
 
 export interface ConfigOverrides {
@@ -264,7 +302,25 @@ export function parseViewport(viewport: string): { width: number; height: number
 const BROWSERS: BrowserName[] = ['chromium', 'firefox', 'webkit'];
 const HIDE_BEHAVIORS: HideBehavior[] = ['hide', 'ignore'];
 
-function resolveTarget(name: string, t: Target, platformSpecific: boolean, defaultHide: HideBehavior): ResolvedTarget {
+export function resolveChecks(where: string, global: Checks | undefined, own: Checks | undefined): ResolvedChecks {
+  const merged = { ...global, ...own };
+  const out: ResolvedChecks = { overflow: merged.overflow ?? false };
+  if (merged.a11y) {
+    const o = merged.a11y === true ? {} : merged.a11y;
+    const minImpact = o.minImpact ?? 'minor';
+    if (!IMPACTS.includes(minImpact)) throw new Error(`${where}: \`checks.a11y.minImpact\` must be one of ${IMPACTS.join(', ')}`);
+    out.a11y = { tags: o.tags ?? DEFAULT_A11Y_TAGS, disableRules: o.disableRules ?? [], minImpact };
+  }
+  return out;
+}
+
+function resolveTarget(
+  name: string,
+  t: Target,
+  platformSpecific: boolean,
+  defaultHide: HideBehavior,
+  checks: Checks | undefined,
+): ResolvedTarget {
   const dev = t.device === undefined ? undefined : devices[t.device];
   if (t.device !== undefined && !dev) {
     throw new Error(`Target "${name}": unknown device "${t.device}". Use a name from Playwright's device list, e.g. "iPhone 15" or "Pixel 7".`);
@@ -295,6 +351,7 @@ function resolveTarget(name: string, t: Target, platformSpecific: boolean, defau
     reducedMotion: t.reducedMotion ?? 'reduce',
     extraHTTPHeaders: t.extraHTTPHeaders,
     hideBehavior,
+    checks: resolveChecks(`Target "${name}"`, checks, t.checks),
   };
 }
 
@@ -306,7 +363,13 @@ export function resolveConfig(config: Config, rootDir: string, overrides: Config
   const targetEntries = Object.entries(config.targets ?? { chromium: {} });
   if (targetEntries.length === 0) throw new Error('Config must define at least one target');
   const hideBehavior = config.hideBehavior ?? 'hide';
-  const targets = targetEntries.map(([name, t]) => resolveTarget(name, t, platformSpecific, hideBehavior));
+  const targets = targetEntries.map(([name, t]) => resolveTarget(name, t, platformSpecific, hideBehavior, config.checks));
+  const failOn = config.failOn ?? (update === 'none' ? ['changed', 'error', 'added'] : ['changed', 'error']);
+  for (const f of failOn) {
+    if (!(STATUSES as string[]).includes(f) && !(CHECKS as string[]).includes(f)) {
+      throw new Error(`\`failOn\`: unknown "${f}". Use statuses (${STATUSES.join(', ')}) or checks (${CHECKS.join(', ')})`);
+    }
+  }
   const pages = config.pages ?? [];
   const seen = new Set<string>();
   for (const p of pages) {
@@ -367,7 +430,7 @@ export function resolveConfig(config: Config, rootDir: string, overrides: Config
     allowedHostnames: config.allowedHostnames,
     update,
     platformSpecific,
-    failOn: config.failOn ?? (update === 'none' ? ['changed', 'error', 'added'] : ['changed', 'error']),
+    failOn,
   };
 }
 

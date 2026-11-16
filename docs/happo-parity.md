@@ -9,8 +9,8 @@ out of scope for a self-hosted tool). Updated with each parity slice.
 1. **Deterministic capture and target emulation** (done): `data-pixelgate-hide` +
    `hideBehavior`, `mask`, `allowedHostnames`, per-target `device`, `colorScheme`,
    `reducedMotion`, `extraHTTPHeaders`.
-2. **Checks without a baseline**: page errors, horizontal overflow, axe-core, as result
-   fields plus opt-in `failOn` conditions (approve must not clear them).
+2. **Checks without a baseline** (done): `checks.a11y` (axe-core), `checks.overflow`,
+   page errors; result fields plus opt-in `failOn` conditions, which `approve` does not clear.
 3. **ARIA snapshots**: `<name>.aria.yml` baselines, text diff, approved with the screenshot.
 4. Playwright Test fixture, `maxHeight`, outline/shadow-aware element crops, pseudo-class forcing.
 Status: HAVE / PARTIAL / GAP / N/A (SaaS-only, out of scope for a self-hosted tool).
@@ -45,11 +45,11 @@ Status: HAVE / PARTIAL / GAP / N/A (SaaS-only, out of scope for a self-hosted to
 
 | Happo | | pixelgate | Status |
 | --- | --- | --- | --- |
-| accessibility target | axe-core per snapshot, WCAG 2.0/2.1 A/AA, `window.happoAxeOptions` | none | GAP (`@axe-core/playwright` is the wheel) |
+| accessibility target | axe-core per snapshot, WCAG 2.0/2.1 A/AA, `window.happoAxeOptions` | `checks.a11y` (`@axe-core/playwright`): tags, `disableRules`, `minImpact`, scoped to the snapshot's selector | HAVE |
 | ARIA snapshots | text tree of what a screen reader gets, diffed | none | GAP (Playwright `locator.ariaSnapshot()` built in) |
-| `detectHorizontalOverflow` | measure how far a page reaches past the viewport's right edge | none (surface-web tablet layout would have shown it) | GAP |
-| `blockApproval.renderErrors` | page errors block approval | page errors collected and shown, never fail | PARTIAL |
-| `blockApproval.accessibilityViolations` / `horizontalOverflow` | | n/a until those checks exist | GAP |
+| `detectHorizontalOverflow` | measure how far a page reaches past the viewport's right edge | `checks.overflow` (global or per target) → `overflowPx` | HAVE |
+| `blockApproval.renderErrors` | page errors block approval | `failOn: ['pageErrors']` | HAVE |
+| `blockApproval.accessibilityViolations` / `horizontalOverflow` | | `failOn: ['a11y', 'overflow']`; `approve` does not clear findings | HAVE |
 | `failOnWaitForTimeout` | | `waitFor` timeout is an `error` | HAVE |
 
 ## Comparison

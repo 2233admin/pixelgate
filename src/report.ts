@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { Status } from './config.js';
+import type { CheckName, FailOn, Impact, Status } from './config.js';
 import { renderHtml } from './html.js';
 import { safeName } from './names.js';
 import { matchesAny } from './storybook.js';
@@ -9,6 +9,19 @@ import { matchesAny } from './storybook.js';
 /** Everything report/approve need: just the working directory. */
 export interface OutDir {
   outDir: string;
+}
+
+/** One axe-core rule a snapshot violates. */
+export interface A11yViolation {
+  /** axe rule id, e.g. `image-alt`. */
+  id: string;
+  impact?: Impact;
+  help: string;
+  helpUrl: string;
+  /** Elements that violate it. */
+  nodes: number;
+  /** Selectors of the first few of them. */
+  targets: string[];
 }
 
 export interface SnapshotResult {
@@ -28,14 +41,19 @@ export interface SnapshotResult {
   pageErrors?: string[];
   /** Hostnames `allowedHostnames` blocked while rendering (why an asset may be missing). */
   blocked?: string[];
+  /** axe-core violations (`checks.a11y`). */
+  a11y?: A11yViolation[];
+  /** CSS pixels the page reaches past the right edge of the viewport (`checks.overflow`). */
+  overflowPx?: number;
 }
 
 export interface Report {
   version: 1;
   createdAt: string;
   failed: boolean;
-  failOn: Status[];
-  summary: Record<Status, number> & { total: number };
+  failOn: FailOn[];
+  /** Per status, and per check: how many snapshots have that finding. */
+  summary: Record<Status | CheckName, number> & { total: number };
   results: SnapshotResult[];
 }
 
@@ -60,13 +78,36 @@ export function sortResults(results: SnapshotResult[]): SnapshotResult[] {
   );
 }
 
-export function summarize(results: SnapshotResult[], failOn: Status[]): Pick<Report, 'summary' | 'failed'> {
-  const summary = { total: results.length, unchanged: 0, changed: 0, added: 0, updated: 0, removed: 0, error: 0 };
-  for (const r of results) summary[r.status]++;
+/** Check findings of a result. They come from the result's fields, never its status, so `approve` cannot clear them. */
+export function checkFindings(r: SnapshotResult): CheckName[] {
+  const found: CheckName[] = [];
+  if (r.pageErrors?.length) found.push('pageErrors');
+  if (r.a11y?.length) found.push('a11y');
+  if (r.overflowPx) found.push('overflow');
+  return found;
+}
+
+export function summarize(results: SnapshotResult[], failOn: FailOn[]): Pick<Report, 'summary' | 'failed'> {
+  const summary = {
+    total: results.length,
+    unchanged: 0,
+    changed: 0,
+    added: 0,
+    updated: 0,
+    removed: 0,
+    error: 0,
+    pageErrors: 0,
+    a11y: 0,
+    overflow: 0,
+  };
+  for (const r of results) {
+    summary[r.status]++;
+    for (const c of checkFindings(r)) summary[c]++;
+  }
   return { summary, failed: failOn.some((s) => summary[s] > 0) };
 }
 
-export function buildReport(results: SnapshotResult[], failOn: Status[]): Report {
+export function buildReport(results: SnapshotResult[], failOn: FailOn[]): Report {
   return { version: 1, createdAt: new Date().toISOString(), failOn, ...summarize(results, failOn), results: sortResults(results) };
 }
 

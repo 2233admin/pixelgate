@@ -1,6 +1,8 @@
+import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, firefox, webkit, type Browser, type BrowserContext, type BrowserType, type Page } from 'playwright';
 import { pngCodec, type Codec, type Matcher } from './compare.js';
-import { HIDE_ATTR, type PageSnap, type ResolvedConfig, type ResolvedTarget } from './config.js';
+import { HIDE_ATTR, IMPACTS, type A11yOptions, type PageSnap, type ResolvedConfig, type ResolvedTarget } from './config.js';
+import type { A11yViolation } from './report.js';
 import { safeName } from './names.js';
 import { matchesAny } from './storybook.js';
 
@@ -72,6 +74,45 @@ export interface CaptureResult {
   pageErrors: string[];
   /** Hostnames whose requests `allowedHostnames` blocked while rendering. */
   blocked?: string[];
+  a11y?: A11yViolation[];
+  overflowPx?: number;
+}
+
+/** How far the page reaches past the right edge of the viewport, in CSS pixels (0 = fits). */
+export async function measureOverflow(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const d = document.documentElement;
+    return Math.max(0, d.scrollWidth - d.clientWidth);
+  });
+}
+
+/** axe-core on the page, scoped to `selector` when it is plain CSS (axe cannot read Playwright selectors). */
+export async function runAxe(page: Page, selector: string | undefined, opts: Required<A11yOptions>): Promise<A11yViolation[]> {
+  let axe = new AxeBuilder({ page }).withTags(opts.tags);
+  if (opts.disableRules.length) axe = axe.disableRules(opts.disableRules);
+  if (selector) {
+    const css = await page.evaluate((s) => {
+      try {
+        document.querySelector(s);
+        return true;
+      } catch {
+        return false;
+      }
+    }, selector);
+    if (css) axe = axe.include(selector);
+  }
+  const { violations } = await axe.analyze();
+  const min = IMPACTS.indexOf(opts.minImpact);
+  return violations
+    .filter((v) => IMPACTS.indexOf(v.impact ?? 'minor') >= min)
+    .map((v) => ({
+      id: v.id,
+      ...(v.impact ? { impact: v.impact } : {}),
+      help: v.help,
+      helpUrl: v.helpUrl,
+      nodes: v.nodes.length,
+      targets: v.nodes.slice(0, 5).map((n) => n.target.map(String).join(' ')),
+    }));
 }
 
 /** `URL.hostname` keeps IPv6 brackets (`[::1]`); globs and reports use the bare address. */
@@ -252,6 +293,15 @@ export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], matcher
             timeoutMs: cfg.stabilize.stableTimeoutMs,
             intervalMs: cfg.stabilize.stableIntervalMs,
           });
+          // Checks run on the state that was captured, after the screenshot so they cannot change it.
+          if (target.checks.overflow) {
+            const px = await measureOverflow(page);
+            if (px > 0) r.overflowPx = px;
+          }
+          if (target.checks.a11y) {
+            const v = await runAxe(page, snap.selector, target.checks.a11y);
+            if (v.length) r.a11y = v;
+          }
         } catch (e) {
           r.error = e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e);
         } finally {
