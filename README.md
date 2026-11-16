@@ -723,6 +723,9 @@ pnpm deps:latest     # move everything to latest
 Dependency policy: always on the latest release of every dependency. Dependabot
 opens the bumps weekly; `deps:check` must be clean before a release.
 
+Contributions: [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Generative AI policy](docs/gen-ai-policy.md).
+
 ### Releasing
 
 Releases go out through [`.github/workflows/release.yml`](.github/workflows/release.yml)
