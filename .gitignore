@@ -11,3 +11,6 @@ test/fixtures/playwright-app/test-results/
 test/fixtures/**/dist/
 .vitest/
 *.timestamp-*.mjs
+
+# Written by the release workflow before npm pack (.github/scripts/engine-manifest.cjs).
+/engine-manifest.json

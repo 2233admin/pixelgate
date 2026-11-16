@@ -518,7 +518,30 @@ checks properties (LTL formulas) after every step, by default "no uncaught
 exceptions" and the like. pixelgate starts Chromium with Playwright, so its
 config applies, and the engine attaches to that page. The engine is
 [Bombadil](https://github.com/antithesishq/bombadil), vendored in `engine/` and
-built per `engine/README.md` (distribution comes later).
+built per `engine/README.md`.
+
+The engine is downloaded on first use from the GitHub release matching the
+installed pixelgate version, verified against the sha256 pinned in the package
+(`engine-manifest.json`), and cached in `<cache>/pixelgate/engine/<version>/`
+(`%LOCALAPPDATA%` on Windows, else `$XDG_CACHE_HOME` or `~/.cache`). Run
+`pixelgate engine install` to fetch it ahead of time (CI), `pixelgate engine path`
+to print where it is. Platforms: Windows x64 and arm64 (runs the x64 build),
+Linux x64 and arm64 with glibc, macOS arm64; elsewhere build it and set
+`PIXELGATE_ENGINE`.
+
+| Variable | |
+| --- | --- |
+| `PIXELGATE_ENGINE` | Use this binary; nothing is downloaded. |
+| `PIXELGATE_ENGINE_MIRROR` | Base URL instead of `https://github.com/2233admin/pixelgate/releases/download` (`<base>/v<version>/<file>`). The pinned hash keeps any mirror safe. |
+| `PIXELGATE_ENGINE_OFFLINE=1` | Never download; fail if the cache is empty. |
+| `PIXELGATE_CACHE_DIR` | Cache root. |
+| `PIXELGATE_ENGINE_TIMEOUT_MS` | Download timeout, default 120000. |
+| `NODE_USE_ENV_PROXY=1` | Make the download honour `HTTP(S)_PROXY`. |
+
+Verifying the engine: npm provenance covers the package, whose
+`engine-manifest.json` pins each binary's sha256. The release also carries
+`SHA256SUMS`, and `gh attestation verify <file> --repo 2233admin/pixelgate`
+checks the build provenance of a binary.
 
 ```sh
 pixelgate explore http://localhost:3000 --engine path/to/bombadil --time-limit 2m
@@ -527,7 +550,7 @@ pixelgate explore http://localhost:3000 my-spec.ts   # own properties; PIXELGATE
 
 | Flag | |
 | --- | --- |
-| `--engine <path>` | Engine binary; else `PIXELGATE_ENGINE`. Missing: exit 2. |
+| `--engine <path>` | Engine binary; else `PIXELGATE_ENGINE`, else the downloaded one. Missing: exit 2. |
 | `--time-limit <dur>` | `60s` default; a number with `s`/`m`/`h`/`d`. |
 | `--keep-going` | Keep exploring after a violation (default stops at the first). |
 | `--headed` | Show the browser. |
@@ -725,12 +748,18 @@ Each release:
 1. Bump `version` in `package.json` on `main` (a normal PR). Pre-release versions
    (`1.2.0-rc.1`) are not supported yet.
 2. Tag that commit of `main` `v<version>` and push the tag.
-3. The workflow checks the tag against `package.json` and `main`, runs typecheck and tests,
-   packs the tarball, stages it on npm (`npm stage publish`, with provenance) from a job that
-   installs nothing, and drafts the GitHub release.
-4. A maintainer approves the staged version on npmjs.com (Staged Packages, or
-   `npm stage approve <id>`), which asks for their 2FA. Only then is it installable. Then
-   publish the draft release.
+3. The workflow builds the explore engine for each platform (cold, no build cache), checks
+   the tag against `package.json` and `main`, runs typecheck and tests (the explore e2e on
+   the Linux engine it just built), writes `engine-manifest.json` with each binary's sha256
+   into the package, stages the tarball on npm (`npm stage publish`, with provenance) from a
+   job that installs nothing, attests the engine binaries, and drafts the GitHub release
+   with the binaries, `SHA256SUMS` and `THIRD_PARTY_LICENSES.html` attached.
+4. Publish the draft release first: `pixelgate explore` downloads the engine from it.
+5. Then approve the staged version on npmjs.com (Staged Packages, or
+   `npm stage approve <id>`), which asks for their 2FA. Only then is it installable.
+6. Run the [`engine-check`](.github/workflows/engine-check.yml) workflow with the version:
+   it installs the published package on Windows, Linux and macOS and runs
+   `pixelgate engine install`, which downloads and verifies the release's engine.
 
 ## Roadmap
 

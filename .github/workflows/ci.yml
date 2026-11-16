@@ -117,12 +117,13 @@ jobs:
           path: engine/bombadil/target/release/bombadil${{ runner.os == 'Windows' && '.exe' || '' }}
           key: engine-${{ runner.os }}-${{ hashFiles('engine/bombadil/**') }}
 
+      # The version is pinned in engine/bombadil/rust-toolchain.toml.
       - if: steps.engine-cache.outputs.cache-hit != 'true'
-        run: rustup toolchain install stable --profile minimal && rustup default stable
-        shell: bash
+        run: rustup toolchain install
+        working-directory: engine/bombadil
 
       - if: steps.engine-cache.outputs.cache-hit != 'true'
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: engine/bombadil
 

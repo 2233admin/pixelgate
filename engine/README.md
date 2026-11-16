@@ -19,6 +19,19 @@ On top of upstream, kept small so `git subtree pull` stays easy:
 - `lib/bombadil-cli/build.rs`: ship the placeholder inspect page when `trunk` is not
   installed; link with a 16 MB main-thread stack on Windows (MSVC gives 1 MB, the engine
   needs more).
+- `rust-toolchain.toml`: pins the Rust version the release binaries are built with.
+
+Outside the subtree, `about.toml` and `about.hbs` configure
+[cargo-about](https://github.com/EmbarkStudios/cargo-about), which writes the
+`THIRD_PARTY_LICENSES.html` attached to each release.
+
+## Distribution
+
+`.github/workflows/release.yml` builds the binaries (through `engine.yml`, without the build
+cache), pins their sha256 in the npm package's `engine-manifest.json`, attests them and
+attaches them to the GitHub release as `pixelgate-engine-<target>`. `pixelgate explore`
+downloads the one for its platform on first use and checks it against the manifest
+(`src/engine.ts`).
 
 ## Build
 

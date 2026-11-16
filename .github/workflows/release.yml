@@ -1,11 +1,13 @@
 name: release
 
 # Publish to npm with trusted publishing (OIDC): no npm token is stored anywhere.
-# Push a tag `v<version>` matching package.json on a commit of main. This workflow tests that
-# commit and packs it, stages the tarball on npm and drafts the GitHub release. A maintainer
-# then approves the staged version on npmjs.com (Staged Packages, or `npm stage approve <id>`),
-# which needs their 2FA (OIDC can stage but never approve), and publishes the draft release.
-# See "Releasing" in README.md.
+# Push a tag `v<version>` matching package.json on a commit of main. This workflow builds the
+# explore engine for each platform (cold, no cache), tests the commit, packs it with an
+# engine-manifest.json pinning each binary's sha256, stages the tarball on npm, attests the
+# binaries and drafts the GitHub release with them attached. A maintainer then publishes the
+# draft release (so the engine downloads work), and approves the staged npm version on
+# npmjs.com (Staged Packages, or `npm stage approve <id>`), which needs their 2FA: OIDC can
+# stage but never approve. See "Releasing" in README.md.
 #
 # npm's trusted-publisher config names this file (`release.yml`) and the `npm` environment:
 # rename either one and publishing fails until the config is recreated on npmjs.com.
@@ -21,9 +23,20 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The engine binaries attached to the release. Built cold: a cache saved by another
+  # branch's run could carry tampered build output.
+  engine:
+    uses: ./.github/workflows/engine.yml
+    with:
+      cache: false
+      licenses: true
+    permissions:
+      contents: read
+
   # Runs the dev dependencies' code (install scripts, build, tests): no OIDC token here, so
   # nothing in it can talk to npm as this repository.
   build:
+    needs: engine
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -37,7 +50,7 @@ jobs:
           node-version: lts/*
           package-manager-cache: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 12
 
@@ -70,10 +83,28 @@ jobs:
 
       - run: pnpm typecheck
 
-      # A tag can point at a commit CI never ran on.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: engine-*-*
+          path: ${{ runner.temp }}/engine
+          merge-multiple: true
+
+      # Pins each binary's sha256 and size in the package: what `pixelgate explore` checks a
+      # downloaded engine against. Not in git; written for this version only.
+      - name: Engine manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "${RUNNER_TEMP}"/engine/pixelgate-engine-*
+          node .github/scripts/engine-manifest.cjs "${RUNNER_TEMP}/engine" engine-manifest.json
+
+      # A tag can point at a commit CI never ran on. The explore e2e runs the Linux binary
+      # this release ships.
       - run: pnpm test
         env:
           PIXELGATE_TEST_TMP: ${{ runner.temp }}
+          PIXELGATE_ENGINE: ${{ runner.temp }}/engine/pixelgate-engine-x86_64-unknown-linux-gnu
+          PIXELGATE_REQUIRE_ENGINE: '1'
 
       # Lists the tarball's files in the log.
       - name: Pack
@@ -85,6 +116,13 @@ jobs:
         with:
           name: npm-tarball
           path: ${{ runner.temp }}/pack/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: engine-sums
+          path: ${{ runner.temp }}/engine/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
 
@@ -132,13 +170,49 @@ jobs:
           fi
           npm stage publish --ignore-scripts "${tarballs[0]}"
 
+  # Build provenance for the engine binaries (`gh attestation verify`). No checkout, no
+  # install: nothing here runs code from the repository or its dependencies.
+  attest:
+    needs: engine
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Sigstore signing of the attestation
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: engine-*-*
+          path: ${{ runner.temp }}/engine
+          merge-multiple: true
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/engine/pixelgate-engine-*
+
   release:
-    needs: stage
+    needs: [build, stage, attest]
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the draft release
     steps:
-      # A draft, so nothing public points at a version that is never approved on npm.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: engine-*
+          path: ${{ runner.temp }}/assets
+          merge-multiple: true
+
+      # The binaries uploaded are the ones whose hashes the staged package pins.
+      - name: Verify the binaries
+        shell: bash
+        working-directory: ${{ runner.temp }}/assets
+        run: |
+          set -euo pipefail
+          ls -l
+          sha256sum -c SHA256SUMS
+
+      # A draft: publish it before approving the npm version, so the engine downloads of
+      # that version work as soon as it is installable.
       - name: Draft GitHub release
         shell: bash
         env:
@@ -150,6 +224,10 @@ jobs:
           {
             echo "npm: [\`pixelgate-cli@${version}\`](https://www.npmjs.com/package/pixelgate-cli/v/${version})"
             echo
+            echo "The \`pixelgate-engine-*\` files are the explore engine, a build of the vendored [Bombadil](https://github.com/antithesishq/bombadil) (MIT). \`pixelgate explore\` downloads the one for its platform and checks it against the sha256 pinned in the npm package. By hand: \`sha256sum -c SHA256SUMS\`, or \`gh attestation verify <file> --repo ${GH_REPO}\`. Third-party licenses: THIRD_PARTY_LICENSES.html."
+            echo
           } > "${RUNNER_TEMP}/notes.md"
+          cd "${RUNNER_TEMP}/assets"
           gh release create "${GITHUB_REF_NAME}" --draft --verify-tag --generate-notes \
-            --notes-file "${RUNNER_TEMP}/notes.md"
+            --notes-file "${RUNNER_TEMP}/notes.md" \
+            pixelgate-engine-* SHA256SUMS THIRD_PARTY_LICENSES.html
