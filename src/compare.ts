@@ -4,9 +4,9 @@
  * a codec turns files into RGBA and back. Both are looked up by name, built-ins
  * first, then whatever the config registers.
  */
+import { convertIndexedToRgb, decode as decodePng, encode as encodePng, type DecodedPng } from 'fast-png';
 import jpeg from 'jpeg-js';
 import pixelmatch from 'pixelmatch';
-import { PNG } from 'pngjs';
 import { ssim } from 'ssim.js';
 
 /** Decoded image, RGBA, 4 bytes per pixel. */
@@ -45,16 +45,39 @@ export interface Codec {
 
 // ---------------------------------------------------------------- codecs
 
+/** Any decoded PNG (grey, grey+alpha, RGB, RGBA, indexed; 8 or 16 bit) as 8-bit RGBA. */
+export function pngToRgba(png: DecodedPng): DecodedImage {
+  const { width, height } = png;
+  const src = png.palette ? convertIndexedToRgb(png) : png.data;
+  // Indexed images expand to RGB, or RGBA when they carry transparency.
+  const channels = png.palette ? src.length / (width * height) : png.channels;
+  const shift = !png.palette && png.depth === 16 ? 8 : 0;
+  const n = width * height;
+  if (channels === 4 && shift === 0 && src instanceof Uint8Array) return { width, height, data: src };
+  const out = new Uint8Array(n * 4);
+  for (let p = 0; p < n; p++) {
+    const s = p * channels;
+    const v = (k: number) => (src[s + k]! >> shift) & 0xff;
+    const [r, g, b, a] =
+      channels === 1 ? [v(0), v(0), v(0), 255]
+      : channels === 2 ? [v(0), v(0), v(0), v(1)]
+      : channels === 3 ? [v(0), v(1), v(2), 255]
+      : [v(0), v(1), v(2), v(3)];
+    out[p * 4] = r; out[p * 4 + 1] = g; out[p * 4 + 2] = b; out[p * 4 + 3] = a;
+  }
+  return { width, height, data: out };
+}
+
+// fast-png (maintained) instead of pngjs: pngjs subclasses zlib.Inflate the
+// pre-ES6 way and throws "Class constructor Inflate cannot be invoked without
+// 'new'" on Node 27 (seen in CI on v27.0.0-alpha).
 export const pngCodec: Codec = {
   extension: 'png',
   decode(file) {
-    const img = PNG.sync.read(file);
-    return { width: img.width, height: img.height, data: img.data };
+    return pngToRgba(decodePng(file));
   },
   encode({ width, height, data }) {
-    const img = new PNG({ width, height });
-    img.data = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-    return PNG.sync.write(img);
+    return Buffer.from(encodePng({ width, height, data, channels: 4, depth: 8 }));
   },
   screenshot: { type: 'png' },
 };

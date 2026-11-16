@@ -20,6 +20,8 @@ jobs:
   test:
     name: test (${{ matrix.os }}, node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
+    # The next-Node row is an early warning, not a gate.
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +29,9 @@ jobs:
           # Floor of `engines` in package.json and of vitest/vite.
           - { os: ubuntu-latest, node: '22.18' }
           - { os: ubuntu-latest, node: lts/* }
-          - { os: ubuntu-latest, node: current }
+          # `current` resolves to the next major's pre-release when there is no newer stable
+          # (v27.0.0-alpha on 2026-11-16): useful to see breakage early, never blocking.
+          - { os: ubuntu-latest, node: current, experimental: true }
           # Baselines are per platform; make sure every platform's paths and rendering work.
           - { os: windows-latest, node: lts/* }
           - { os: macos-latest, node: lts/* }
@@ -39,9 +43,10 @@ jobs:
           node-version: ${{ matrix.node }}
           package-manager-cache: false
 
-      # Version comes from "packageManager" in package.json.
+      # Latest pnpm 12 (not pinned in package.json, so it never shows up as an outdated dependency).
       - uses: pnpm/action-setup@v6
         with:
+          version: 12
           cache: true
 
       - run: pnpm install --frozen-lockfile
@@ -77,5 +82,7 @@ jobs:
           node-version: lts/*
           package-manager-cache: false
       - uses: pnpm/action-setup@v6
+        with:
+          version: 12
       - run: pnpm install --frozen-lockfile
       - run: pnpm deps:check

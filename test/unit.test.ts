@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { PNG } from 'pngjs';
+import { encode as encodePng } from 'fast-png';
 import { describe, it } from 'vitest';
 import { stableShot } from '../src/capture.js';
 import {
@@ -21,14 +21,13 @@ import { storiesFromIndex } from '../src/storybook.js';
 import { pixelgateScreenshots, snapshotName } from '../src/vitest.js';
 
 function png(width: number, height: number, paint: (x: number, y: number) => [number, number, number]): Buffer {
-  const img = new PNG({ width, height });
+  const data = new Uint8Array(width * height * 4);
   for (let y = 0; y < height; y++)
     for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4;
       const [r, g, b] = paint(x, y);
-      img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
+      data.set([r, g, b, 255], (y * width + x) * 4);
     }
-  return PNG.sync.write(img);
+  return pngCodec.encode({ width, height, data });
 }
 const white = () => [255, 255, 255] as [number, number, number];
 const WHITE = png(10, 10, white);
@@ -137,6 +136,22 @@ describe('codecs', () => {
     assert.deepEqual([back.width, back.height], [64, 64]);
     assert.ok(Math.abs(back.data[(20 * 64 + 20) * 4]! - 20) < 12, 'dark box survives');
     assert.equal(jpegCodec.extension, 'jpg');
+  });
+  it('png decodes every colour type to 8-bit RGBA', () => {
+    // 2x1: [black, white] in grey, grey+alpha, RGB, 16-bit RGB and indexed.
+    const cases = [
+      encodePng({ width: 2, height: 1, channels: 1, depth: 8, data: new Uint8Array([0, 255]) }),
+      encodePng({ width: 2, height: 1, channels: 2, depth: 8, data: new Uint8Array([0, 255, 255, 128]) }),
+      encodePng({ width: 2, height: 1, channels: 3, depth: 8, data: new Uint8Array([0, 0, 0, 255, 255, 255]) }),
+      encodePng({ width: 2, height: 1, channels: 3, depth: 16, data: new Uint16Array([0, 0, 0, 65535, 65535, 65535]) }),
+      encodePng({ width: 2, height: 1, channels: 1, depth: 8, data: new Uint8Array([0, 1]), palette: [[0, 0, 0], [255, 255, 255]] }),
+    ];
+    const expected = [[0, 0, 0, 255, 255, 255, 255, 255], [0, 0, 0, 255, 255, 255, 255, 128]];
+    cases.forEach((file, i) => {
+      const img = pngCodec.decode(Buffer.from(file));
+      assert.deepEqual([img.width, img.height], [2, 1], `case ${i}`);
+      assert.deepEqual([...img.data], i === 1 ? expected[1] : expected[0], `case ${i}`);
+    });
   });
   it('png round-trips exactly', () => {
     const img = scene(10);
