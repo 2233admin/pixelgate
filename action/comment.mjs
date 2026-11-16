@@ -1,5 +1,6 @@
 // Create or update this job's pixelgate comment on the pull request. The comment is found by
-// its first line, the marker `pixelgate summary --id <artifact-name>` writes. Failures are
+// its author (this token's identity) and its first line, the marker
+// `pixelgate summary --id <artifact-name>` writes. Failures are
 // warnings: a fork pull request's token cannot comment, and the gate result stands anyway.
 import { readFileSync } from 'node:fs';
 
@@ -23,11 +24,22 @@ async function gh(method, url, data) {
   return res.json();
 }
 
+// Who this token comments as. GITHUB_TOKEN may not call /user; it always posts as github-actions[bot].
+async function self() {
+  try {
+    return (await gh('GET', `${api}/user`)).login;
+  } catch {
+    return 'github-actions[bot]';
+  }
+}
+
 try {
+  const me = await self();
   let existing;
   for (let page = 1; ; page++) {
     const list = await gh('GET', `${api}/repos/${repo}/issues/${pr}/comments?per_page=100&page=${page}`);
-    for (const c of list) if (c.body?.startsWith(marker)) existing = c;
+    // Our own comment only: someone quoting the marker must not take over the report.
+    for (const c of list) if (c.user?.login === me && c.body?.startsWith(marker)) existing = c;
     if (list.length < 100) break;
   }
   if (existing) {
