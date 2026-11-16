@@ -81,6 +81,8 @@ export interface Target {
   hideBehavior?: HideBehavior;
   /** Merged over the top-level `checks`, e.g. `{ overflow: true }` only on a phone target. */
   checks?: Checks;
+  /** Overrides the top-level `ariaSnapshot` for this target. */
+  ariaSnapshot?: boolean;
 }
 
 export interface PageSnap {
@@ -101,6 +103,8 @@ export interface PageSnap {
   beforeCapture?: (page: Page) => Promise<void> | void;
   /** Selectors painted over with a solid box in this snapshot, on top of the top-level `mask`. */
   mask?: string[];
+  /** Overrides the target's `ariaSnapshot` for this snapshot. */
+  ariaSnapshot?: boolean;
 }
 
 export interface StorybookSource {
@@ -113,6 +117,8 @@ export interface StorybookSource {
   selector?: string;
   /** Selectors painted over in every story, on top of the top-level `mask`. */
   mask?: string[];
+  /** Overrides the target's `ariaSnapshot` for every story. */
+  ariaSnapshot?: boolean;
 }
 
 export interface ViteSource {
@@ -194,6 +200,12 @@ export interface Config {
   /** Checks that need no baseline, for every target (targets can override). Default: none. */
   checks?: Checks;
   /**
+   * Also keep each snapshot's ARIA snapshot (Playwright `ariaSnapshot()`: the accessibility
+   * tree as YAML) as a `<name>.aria.yml` baseline next to its screenshot, compared as text.
+   * Default false. Targets, Storybook sources and pages can override; the most specific wins.
+   */
+  ariaSnapshot?: boolean;
+  /**
    * Selectors painted over with a solid box in every snapshot (dynamic content you
    * cannot mark with `data-pixelgate-hide`, e.g. third-party widgets).
    */
@@ -240,6 +252,8 @@ export interface ResolvedTarget {
   extraHTTPHeaders?: Record<string, string>;
   hideBehavior: HideBehavior;
   checks: ResolvedChecks;
+  /** Default for this target's snapshots; a page or Storybook source can override it. */
+  ariaSnapshot: boolean;
 }
 
 export interface ResolvedConfig {
@@ -320,6 +334,7 @@ function resolveTarget(
   platformSpecific: boolean,
   defaultHide: HideBehavior,
   checks: Checks | undefined,
+  defaultAria = false,
 ): ResolvedTarget {
   const dev = t.device === undefined ? undefined : devices[t.device];
   if (t.device !== undefined && !dev) {
@@ -352,6 +367,7 @@ function resolveTarget(
     extraHTTPHeaders: t.extraHTTPHeaders,
     hideBehavior,
     checks: resolveChecks(`Target "${name}"`, checks, t.checks),
+    ariaSnapshot: t.ariaSnapshot ?? defaultAria,
   };
 }
 
@@ -363,7 +379,7 @@ export function resolveConfig(config: Config, rootDir: string, overrides: Config
   const targetEntries = Object.entries(config.targets ?? { chromium: {} });
   if (targetEntries.length === 0) throw new Error('Config must define at least one target');
   const hideBehavior = config.hideBehavior ?? 'hide';
-  const targets = targetEntries.map(([name, t]) => resolveTarget(name, t, platformSpecific, hideBehavior, config.checks));
+  const targets = targetEntries.map(([name, t]) => resolveTarget(name, t, platformSpecific, hideBehavior, config.checks, config.ariaSnapshot));
   const failOn = config.failOn ?? (update === 'none' ? ['changed', 'error', 'added'] : ['changed', 'error']);
   for (const f of failOn) {
     if (!(STATUSES as string[]).includes(f) && !(CHECKS as string[]).includes(f)) {

@@ -1,3 +1,4 @@
+import { patchDelta } from './aria.js';
 import type { CheckName, Status } from './config.js';
 import { checkFindings, type Report, type SnapshotResult } from './report.js';
 
@@ -40,16 +41,22 @@ function percent(ratio: number): string {
 function detail(r: SnapshotResult): string {
   switch (r.status) {
     case 'changed': {
-      const parts = [r.diffRatio !== undefined ? `${percent(r.diffRatio)} of pixels` : r.message ?? 'changed'];
+      const parts: string[] = [];
+      // With an ARIA snapshot a row can be changed for its tree alone: then there is no `current`.
+      if (r.current || !r.aria) parts.push(r.diffRatio !== undefined ? `${percent(r.diffRatio)} of pixels` : r.message ?? 'changed');
       if (r.sizeChanged) parts.push('size changed');
-      return parts.join(', ');
+      if (r.aria?.status === 'changed' && r.aria.patch) {
+        const d = patchDelta(r.aria.patch);
+        parts.push(`ARIA tree +${d.added} -${d.removed} lines${r.aria.truncated ? ' (diff truncated)' : ''}`);
+      }
+      return parts.join(', ') || 'changed';
     }
     case 'added':
       return 'no baseline yet';
     case 'updated':
       return 'baseline overwritten';
     case 'removed':
-      return 'baseline with no snapshot in this run';
+      return r.baseline ? 'baseline with no snapshot in this run' : 'ARIA baseline with no snapshot in this run';
     case 'error': {
       const msg = (r.error ?? 'error').split('\n')[0]!;
       return msg.length > 200 ? msg.slice(0, 199) + '…' : msg;
@@ -63,7 +70,9 @@ function detail(r: SnapshotResult): string {
 function images(r: SnapshotResult): Array<[label: string, path: string]> {
   const out: Array<[string, string | undefined]> =
     r.status === 'changed'
-      ? [['Baseline', r.baseline], ['Current', r.current], ['Diff', r.diff]]
+      ? r.current || !r.aria
+        ? [['Baseline', r.baseline], ['Current', r.current], ['Diff', r.diff]]
+        : [['Screenshot (pixels unchanged)', r.baseline]]
       : r.status === 'removed'
         ? [['Baseline', r.baseline]]
         : [['Current', r.current ?? r.baseline]];
@@ -124,6 +133,28 @@ function checksTable(report: Report, maxRows: number): string[] {
   return ['', '#### Checks', '', note.join(' '), '', '| Check | Snapshot | Target | Detail |', '| --- | --- | --- | --- |', ...rows.slice(0, maxRows), ...more];
 }
 
+/** ARIA snapshot diffs as fenced `diff` blocks; the fence is longer than any backtick run inside. */
+function ariaDiffs(listed: SnapshotResult[], open: boolean, maxImages: number): string[] {
+  const withPatch = listed.filter((r) => r.aria?.patch);
+  if (!withPatch.length) return [];
+  const lines = ['', `<details${open ? ' open' : ''}><summary>ARIA snapshot changes</summary>`, ''];
+  for (const r of withPatch.slice(0, maxImages)) {
+    const patch = r.aria!.patch!;
+    const fence = '`'.repeat(Math.max(3, ...(patch.match(/`+/g) ?? []).map((m) => m.length + 1)));
+    lines.push(
+      `**${code(r.name)}** ${code(r.target)}: ${r.aria!.status}${r.aria!.truncated ? ' (diff truncated, full tree in the report)' : ''}`,
+      '',
+      fence + 'diff',
+      patch,
+      fence,
+      '',
+    );
+  }
+  if (withPatch.length > maxImages) lines.push(`…and ${withPatch.length - maxImages} more in the full report.`, '');
+  lines.push('</details>');
+  return lines;
+}
+
 function table(listed: SnapshotResult[], maxRows: number): string[] {
   if (!listed.length) return [];
   const rows = listed
@@ -165,7 +196,7 @@ function footer(report: Report, opts: MarkdownOptions): string[] {
   if (accept && opts.acceptCommand) {
     lines.push(
       '',
-      'Intended? Review the report, then accept these screenshots as the new baselines and commit them:',
+      'Intended? Review the report, then accept these snapshots as the new baselines and commit them:',
       '',
       '```sh',
       opts.acceptCommand,
@@ -184,6 +215,7 @@ export function renderMarkdown(report: Report, opts: MarkdownOptions = {}): stri
       ...headline(report, opts.id),
       ...table(listed, maxRows),
       ...checksTable(report, maxRows),
+      ...ariaDiffs(listed, report.failed, maxImages),
       ...screenshots(listed, opts.imageBaseUrl, report.failed, maxImages),
       ...footer(report, opts),
     ].join('\n') + '\n'

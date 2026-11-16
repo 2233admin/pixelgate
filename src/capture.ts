@@ -1,5 +1,6 @@
 import { AxeBuilder } from '@axe-core/playwright';
 import { chromium, firefox, webkit, type Browser, type BrowserContext, type BrowserType, type Page } from 'playwright';
+import { normalizeAria } from './aria.js';
 import { pngCodec, type Codec, type Matcher } from './compare.js';
 import { HIDE_ATTR, IMPACTS, type A11yOptions, type PageSnap, type ResolvedConfig, type ResolvedTarget } from './config.js';
 import type { A11yViolation } from './report.js';
@@ -76,6 +77,8 @@ export interface CaptureResult {
   blocked?: string[];
   a11y?: A11yViolation[];
   overflowPx?: number;
+  /** Normalised ARIA snapshot, when `ariaSnapshot` is on for this snapshot. */
+  aria?: string;
 }
 
 /** How far the page reaches past the right edge of the viewport, in CSS pixels (0 = fits). */
@@ -182,6 +185,20 @@ export const HIDE_CSS = `[${HIDE_ATTR}] { visibility: hidden !important; }`;
 /** Masked selectors for a snapshot: global, the snapshot's own, and hidden-but-ignored content. */
 export function maskSelectors(cfg: Pick<ResolvedConfig, 'mask'>, snap: PageSnap, target: Pick<ResolvedTarget, 'hideBehavior'>): string[] {
   return [...cfg.mask, ...(snap.mask ?? []), ...(target.hideBehavior === 'ignore' ? [`[${HIDE_ATTR}]`] : [])];
+}
+
+/**
+ * The accessibility tree of what the screenshot captured: the selector's first match, or
+ * the body. Hidden (`data-pixelgate-hide`) and masked elements are left out (`aria-hidden`),
+ * since their content is what changes between runs. Runs last: it leaves those attributes.
+ */
+export async function captureAria(page: Page, snap: PageSnap, cfg: ResolvedConfig, target: ResolvedTarget): Promise<string> {
+  for (const s of new Set([`[${HIDE_ATTR}]`, ...maskSelectors(cfg, snap, target)])) {
+    await page.locator(s).evaluateAll((els) => els.forEach((e) => e.setAttribute('aria-hidden', 'true')));
+  }
+  const root = snap.selector ? page.locator(snap.selector).first() : page.locator('body');
+  // `ariaSnapshot` has no timeout by default.
+  return normalizeAria(await root.ariaSnapshot({ timeout: cfg.timeoutMs }));
 }
 
 /** Screenshots in the codec's format: natively when Playwright supports it, else PNG re-encoded. */
@@ -311,6 +328,7 @@ export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], matcher
             const v = await runAxe(page, snap.selector, target.checks.a11y);
             if (v.length) r.a11y = v;
           }
+          if (snap.ariaSnapshot ?? target.ariaSnapshot) r.aria = await captureAria(page, snap, cfg, target);
         } catch (e) {
           r.error = e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e);
         } finally {

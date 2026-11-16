@@ -19,12 +19,13 @@ run      Capture every snapshot, diff against baseline, write <outDir>/report/.
          Baseline mode (like Vitest): local default writes missing baselines;
          with CI set (or --ci) nothing is written and a missing baseline fails;
          -u / --update also overwrites mismatching baselines.
-approve  Promote current screenshots of changed/added snapshots (from the last
-         run, or the last Vitest run with PixelgateReporter) to baseline.
+approve  Promote current screenshots (and .aria.yml ARIA snapshots) of
+         changed/added snapshots (from the last run, or the last Vitest run with
+         PixelgateReporter) to baseline.
          --from <dir> takes them from another run's out dir instead, e.g. a CI
          artifact from \`gh run download\`: how a Windows/macOS machine accepts
          Linux CI baselines.
-         --prune also deletes baselines reported as removed.
+         --prune also deletes baselines reported as removed (ARIA ones too).
          Without a pixelgate config, uses --out-dir (default .pixelgate).
 summary  Print the last report as Markdown for a pull-request comment or CI job
          summary. --image-base is the URL the report's image paths resolve
@@ -80,6 +81,7 @@ async function main(argv: string[]): Promise<number> {
           r.pageErrors?.length && `page errors ${r.pageErrors.length}`,
           r.a11y?.length && `a11y ${r.a11y.map((v) => v.id).join(',')}`,
           r.overflowPx && `overflow ${r.overflowPx}px`,
+          r.aria && r.aria.status !== 'unchanged' && `aria ${r.aria.status}`,
         ].filter(Boolean);
         log(`${mark[r.status] ?? '?'} ${r.target} ${r.name}${r.error ? `  ${r.error}` : ''}${checks.length ? `  [${checks.join('; ')}]` : ''}`);
       },

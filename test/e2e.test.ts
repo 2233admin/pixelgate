@@ -46,6 +46,14 @@ const dark = `<!doctype html><style>body{margin:0;background:#fff}
 const external = () => `<!doctype html><link rel="stylesheet" href="http://localhost:${port}/ext.css">
 <body style="margin:0"><div class="x" style="width:100px;height:100px"></div></body>`;
 let lastHeaders: Record<string, string | string[] | undefined> = {};
+// ARIA page: the label only changes the accessibility tree, never the pixels; the hidden
+// and masked parts change on every request.
+let ariaLabel = 'Close';
+let ariaTick = 0;
+const ariaPage = () => `<!doctype html><html lang="en"><body style="margin:0;font:16px sans-serif">
+<h1 style="font-size:20px;margin:0">Title</h1><button aria-label="${ariaLabel}">x</button>
+<p>Now <span data-pixelgate-hide>tick ${ariaTick++}</span></p><div class="ad">ad ${ariaTick}</div>
+<div id="card"><h2 style="font-size:16px;margin:0">Card</h2><p>body</p></div></body></html>`;
 
 let server: Server;
 let origin: string;
@@ -80,6 +88,7 @@ beforeAll(async () => {
       '/dynamic': () => dynamic('data-pixelgate-hide'),
       '/dynamic-plain': () => dynamic(''),
       '/dark': () => dark,
+      '/aria': ariaPage,
       '/a11y': () => `<!doctype html><html lang="en"><body style="margin:0">
 <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="40" height="40"><div id="ok"><button>Ok</button></div></body></html>`,
       '/cards': () => `<!doctype html><html lang="en"><body style="margin:0">
@@ -368,6 +377,91 @@ describe('checks without a baseline: a11y, overflow, page errors', () => {
     const after = JSON.parse(await readFile(path.join(tmp, '.pg-a11y-approve', 'report', 'report.json'), 'utf8'));
     assert.equal(after.summary.a11y, 1);
     assert.equal(after.failed, true);
+  });
+});
+
+describe('ARIA snapshots', () => {
+  const at = (outDir: string, update: UpdateMode, extra: Partial<Config> = {}, page: Partial<NonNullable<Config['pages']>[number]> = {}) =>
+    cfgWith(
+      {
+        outDir,
+        targets: { desktop: { viewport: '400x200' } },
+        pages: [{ name: 'a', url: `${origin}/aria`, mask: ['.ad'], ...page }],
+        ariaSnapshot: true,
+        ...extra,
+      },
+      update,
+    );
+  const ariaFile = (outDir: string) => path.join(tmp, outDir, 'baseline', `desktop-${platform}`, 'a.aria.yml');
+
+  it('records the tree as a .aria.yml baseline, without hidden or masked content; a re-run matches', async () => {
+    const first = await run(at('.pg-aria', 'new'));
+    assert.deepEqual([first.results[0]!.status, first.results[0]!.aria?.status], ['added', 'added'], JSON.stringify(first.results));
+    const yml = await readFile(ariaFile('.pg-aria'), 'utf8');
+    assert.match(yml, /- heading "Title" \[level=1\]/);
+    assert.match(yml, /- button "Close"/);
+    assert.doesNotMatch(yml, /tick|ad \d/, yml);
+    const again = await run(at('.pg-aria', 'none'));
+    assert.equal(again.failed, false, JSON.stringify(again.results));
+    assert.deepEqual([again.results[0]!.status, again.results[0]!.aria?.status], ['unchanged', 'unchanged']);
+  });
+
+  it('a CRLF baseline (git autocrlf checkout) still matches', async () => {
+    const file = ariaFile('.pg-aria');
+    await writeFile(file, (await readFile(file, 'utf8')).replace(/\n/g, '\r\n'));
+    const report = await run(at('.pg-aria', 'none'));
+    assert.equal(report.results[0]!.aria?.status, 'unchanged', JSON.stringify(report.results));
+  });
+
+  it('a label change with identical pixels fails as changed with a text diff; approve accepts it', async () => {
+    ariaLabel = 'Dismiss';
+    try {
+      const report = await run(at('.pg-aria', 'none'));
+      const r = report.results[0]!;
+      assert.equal(r.status, 'changed', JSON.stringify(r));
+      assert.equal(r.current, undefined, 'the pixels did not change');
+      assert.equal(r.aria?.status, 'changed');
+      assert.match(r.aria?.patch ?? '', /^-- button "Close": x$/m);
+      assert.match(r.aria?.patch ?? '', /^\+- button "Dismiss": x$/m);
+      assert.equal(report.failed, true);
+
+      await approve(at('.pg-aria', 'none'));
+      assert.match(await readFile(ariaFile('.pg-aria'), 'utf8'), /button "Dismiss"/);
+      const reviewed = JSON.parse(await readFile(path.join(tmp, '.pg-aria', 'report', 'report.json'), 'utf8'));
+      assert.deepEqual([reviewed.results[0].status, reviewed.results[0].aria.status], ['unchanged', 'unchanged']);
+      const after = await run(at('.pg-aria', 'none'));
+      assert.equal(after.failed, false, JSON.stringify(after.results));
+    } finally {
+      ariaLabel = 'Close';
+    }
+  });
+
+  it('turned off: the stray .aria.yml is reported on its row, approve --prune deletes it', async () => {
+    const off = await run(at('.pg-aria', 'none', { ariaSnapshot: false }));
+    const r = off.results[0]!;
+    assert.deepEqual([r.status, r.aria?.status], ['unchanged', 'removed'], JSON.stringify(r));
+    assert.equal(off.failed, false);
+    await approve(at('.pg-aria', 'none', { ariaSnapshot: false }), { prune: true });
+    assert.equal(existsSync(ariaFile('.pg-aria')), false);
+    assert.equal(existsSync(ariaFile('.pg-aria').replace('a.aria.yml', 'a.png')), true, 'the screenshot baseline stays');
+  });
+
+  it('a selector snapshot records the tree of the element it captured', async () => {
+    await run(at('.pg-aria-card', 'new', {}, { selector: '#card' }));
+    const yml = await readFile(ariaFile('.pg-aria-card'), 'utf8');
+    assert.match(yml, /heading "Card"/);
+    assert.doesNotMatch(yml, /Title/);
+  });
+
+  it('turned on for an existing suite in CI mode: rows are added until approved', async () => {
+    await run(at('.pg-aria-late', 'new', { ariaSnapshot: false }));
+    const ci = await run(at('.pg-aria-late', 'none'));
+    const r = ci.results[0]!;
+    assert.deepEqual([r.status, r.aria?.status, r.current], ['added', 'added', undefined], JSON.stringify(r));
+    assert.equal(ci.failed, true);
+    assert.equal(existsSync(ariaFile('.pg-aria-late')), false, 'CI mode writes no baseline');
+    await approve(at('.pg-aria-late', 'none'));
+    assert.equal((await run(at('.pg-aria-late', 'none'))).failed, false);
   });
 });
 

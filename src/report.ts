@@ -24,6 +24,19 @@ export interface A11yViolation {
   targets: string[];
 }
 
+/** A snapshot's ARIA snapshot (`ariaSnapshot`), compared as text. */
+export interface AriaResult {
+  /** `removed`: a baseline with no ARIA snapshot this run (`approve --prune` deletes it). */
+  status: 'unchanged' | 'changed' | 'added' | 'updated' | 'removed';
+  /** Paths relative to `outDir`, forward slashes, like the screenshot's. */
+  baseline?: string;
+  current?: string;
+  /** Unified diff baseline -> current (changed, updated). */
+  patch?: string;
+  /** `patch` was cut short (about 200 lines); the whole tree is in the `.aria.yml` file. */
+  truncated?: boolean;
+}
+
 export interface SnapshotResult {
   target: string;
   name: string;
@@ -45,6 +58,11 @@ export interface SnapshotResult {
   a11y?: A11yViolation[];
   /** CSS pixels the page reaches past the right edge of the viewport (`checks.overflow`). */
   overflowPx?: number;
+  /**
+   * The ARIA snapshot (`ariaSnapshot`). Its status is folded into `status` (the more serious
+   * of the two), so a row can be `changed` with identical pixels: then `current` is unset.
+   */
+  aria?: AriaResult;
 }
 
 export interface Report {
@@ -143,7 +161,17 @@ function inside(dir: string, rel: string): string {
   return abs;
 }
 
-/** Promote current screenshots to baseline for changed/added snapshots in the last report. */
+/** Copies `srcRel` (under the source out dir) to `<o>/baseline/<target>/`; returns the new baseline path. */
+async function promote(source: OutDir, o: OutDir, target: string, srcRel: string | undefined): Promise<string | undefined> {
+  const src = srcRel && inside(source.outDir, srcRel);
+  if (!src || !existsSync(src)) return undefined;
+  const dest = inside(o.outDir, path.join('baseline', target, path.basename(src)));
+  await mkdir(path.dirname(dest), { recursive: true });
+  await copyFile(src, dest);
+  return rel(o, dest);
+}
+
+/** Promote current screenshots (and ARIA snapshots) to baseline for changed/added snapshots in the last report. */
 export async function approve(o: OutDir, opts: ApproveOptions = {}): Promise<SnapshotResult[]> {
   const source: OutDir = opts.from ? { outDir: path.resolve(opts.from) } : o;
   const report = await readReport(source);
@@ -151,32 +179,46 @@ export async function approve(o: OutDir, opts: ApproveOptions = {}): Promise<Sna
   for (const r of report.results) {
     if (opts.only?.length && !matchesAny(r.name, opts.only)) continue;
     const take = r.status === 'changed' || r.status === 'added' || (opts.from !== undefined && r.status === 'updated');
+    let acted = false;
     if (take) {
       // Paths come from the report, so the file format (png/jpg/...) is whatever the run wrote.
       // Mode `new` and Vitest write a brand-new reference straight to baseline; in place there is
       // nothing to copy then, but from another run that baseline is the screenshot to take.
-      const srcRel = r.current ?? (opts.from ? r.baseline : undefined);
-      const src = srcRel && inside(source.outDir, srcRel);
-      if (src && existsSync(src)) {
-        const dest = inside(o.outDir, path.join('baseline', r.target, path.basename(src)));
-        await mkdir(path.dirname(dest), { recursive: true });
-        await copyFile(src, dest);
-        r.baseline = rel(o, dest);
+      r.baseline = (await promote(source, o, r.target, r.current ?? (opts.from ? r.baseline : undefined))) ?? r.baseline;
+      // The ARIA snapshot is approved with the screenshot, by the same rules.
+      const a = r.aria;
+      if (a && a.status !== 'unchanged' && a.status !== 'removed') {
+        a.baseline = (await promote(source, o, r.target, a.current ?? (opts.from ? a.baseline : undefined))) ?? a.baseline;
       }
-      done.push(r);
-    } else if (r.status === 'removed' && opts.prune && r.baseline) {
-      await unlink(inside(o.outDir, r.baseline)).catch(() => {});
-      done.push(r);
+      acted = true;
     }
+    if (opts.prune && r.status === 'removed' && r.baseline) {
+      await unlink(inside(o.outDir, r.baseline)).catch(() => {});
+      acted = true;
+    }
+    if (opts.prune && r.aria?.status === 'removed' && r.aria.baseline) {
+      await unlink(inside(o.outDir, r.aria.baseline)).catch(() => {});
+      acted = true;
+    }
+    if (acted) done.push(r);
   }
   // The source report belongs to the other run; leave it as downloaded.
   if (opts.from) return done;
   // Reflect the approval in the report so a re-opened review page is not stale.
   const key = (r: SnapshotResult) => `${r.target}\0${r.name}`;
   const approved = new Set(done.map(key));
+  const settled = ({ aria, ...r }: SnapshotResult): SnapshotResult => {
+    const out: SnapshotResult = { ...r, status: 'unchanged', diff: undefined };
+    // An approved ARIA snapshot now matches. A removed one stays reported until it is pruned,
+    // so a later `approve --prune` still finds the stray `.aria.yml`.
+    if (aria?.status === 'removed') {
+      if (!opts.prune) out.aria = aria;
+    } else if (aria) out.aria = { status: 'unchanged', baseline: aria.baseline };
+    return out;
+  };
   const results = report.results
     .filter((r) => !(r.status === 'removed' && approved.has(key(r))))
-    .map((r) => (approved.has(key(r)) ? { ...r, status: 'unchanged' as const, diff: undefined } : r));
+    .map((r) => (approved.has(key(r)) ? settled(r) : r));
   await writeReport(o, { ...report, ...summarize(results, report.failOn), results });
   return done;
 }
