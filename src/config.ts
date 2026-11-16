@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { CODECS, COMPARATORS, type Codec, type Comparator } from './compare.js';
 
 export type BrowserName = 'chromium' | 'firefox' | 'webkit';
 export type Status = 'unchanged' | 'changed' | 'added' | 'updated' | 'removed' | 'error';
@@ -78,6 +79,12 @@ export interface Stabilize {
    * `0` = take a single screenshot. Default 5000.
    */
   stableTimeoutMs?: number;
+  /**
+   * Gap between captures in that loop, so two matching frames are at least
+   * this far apart (a screenshot can be faster than a page's own updates).
+   * Default 100.
+   */
+  stableIntervalMs?: number;
 }
 
 export interface Config {
@@ -93,8 +100,20 @@ export interface Config {
   outDir?: string;
   /** Per-pixel color distance tolerance, 0..1 (pixelmatch). Default 0.1. */
   threshold?: number;
-  /** Changed-pixel ratio at or below which a snapshot still counts as unchanged. Default 0. */
+  /** Changed-pixel ratio at or below which a snapshot still counts as unchanged (pixelmatch). Default 0. */
   maxDiffPixelRatio?: number;
+  /**
+   * Comparison algorithm: `pixelmatch` (default, exact pixels), `ssim`
+   * (structural similarity, tolerant of anti-aliasing noise), or a name from
+   * `comparators`. `options` go to the comparator.
+   */
+  comparator?: string | { name: string; options?: Record<string, unknown> };
+  /** Register custom comparators by name (same contract as Vitest's). */
+  comparators?: Record<string, Comparator<any>>;
+  /** Image format for baseline/current files: `png` (default), `jpeg`, or a name from `codecs`. Diffs are always PNG. */
+  format?: string;
+  /** Register custom codecs by name. */
+  codecs?: Record<string, Codec>;
   /** Parallel pages per browser. Default 4. */
   concurrency?: number;
   /** Navigation + readiness timeout per snapshot, ms. Default 30000. */
@@ -134,9 +153,11 @@ export interface ResolvedConfig {
   baseUrl?: string;
   threshold: number;
   maxDiffPixelRatio: number;
+  comparator: { name: string; fn: Comparator<any>; options: Record<string, unknown> };
+  codec: Codec;
   concurrency: number;
   timeoutMs: number;
-  stabilize: Stabilize & { stableTimeoutMs: number };
+  stabilize: Stabilize & { stableTimeoutMs: number; stableIntervalMs: number };
   update: UpdateMode;
   platformSpecific: boolean;
   failOn: Status[];
@@ -213,6 +234,19 @@ export function resolveConfig(config: Config, rootDir: string, overrides: Config
 
   const threshold = config.threshold ?? 0.1;
   if (threshold < 0 || threshold > 1) throw new Error('`threshold` must be within 0..1');
+  const maxDiffPixelRatio = config.maxDiffPixelRatio ?? 0;
+
+  const comparators = { ...COMPARATORS, ...config.comparators };
+  const cmp = typeof config.comparator === 'string' ? { name: config.comparator } : (config.comparator ?? { name: 'pixelmatch' });
+  const fn = comparators[cmp.name];
+  if (!fn) throw new Error(`Unknown comparator "${cmp.name}". Available: ${Object.keys(comparators).join(', ')}`);
+  // The top-level shortcuts are pixelmatch options; explicit options win.
+  const cmpOptions = cmp.name === 'pixelmatch' ? { threshold, maxDiffPixelRatio, ...cmp.options } : { ...cmp.options };
+
+  const codecs = { ...CODECS, ...config.codecs };
+  const format = config.format ?? 'png';
+  const codec = codecs[format];
+  if (!codec) throw new Error(`Unknown format "${format}". Available: ${Object.keys(codecs).join(', ')}`);
 
   return {
     rootDir,
@@ -229,10 +263,16 @@ export function resolveConfig(config: Config, rootDir: string, overrides: Config
     },
     baseUrl: config.baseUrl,
     threshold,
-    maxDiffPixelRatio: config.maxDiffPixelRatio ?? 0,
+    maxDiffPixelRatio,
+    comparator: { name: cmp.name, fn, options: cmpOptions },
+    codec,
     concurrency: Math.max(1, config.concurrency ?? 4),
     timeoutMs: config.timeoutMs ?? 30_000,
-    stabilize: { ...config.stabilize, stableTimeoutMs: config.stabilize?.stableTimeoutMs ?? 5_000 },
+    stabilize: {
+      ...config.stabilize,
+      stableTimeoutMs: config.stabilize?.stableTimeoutMs ?? 5_000,
+      stableIntervalMs: config.stabilize?.stableIntervalMs ?? 100,
+    },
     update,
     platformSpecific,
     failOn: config.failOn ?? (update === 'none' ? ['changed', 'error', 'added'] : ['changed', 'error']),

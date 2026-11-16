@@ -135,6 +135,38 @@ describe('update modes', () => {
   });
 });
 
+describe('pluggable comparator + codec', () => {
+  const cfg = () =>
+    cfgWith({
+      outDir: '.pixelgate-jpeg',
+      format: 'jpeg',
+      comparator: 'ssim',
+      targets: { desktop: { viewport: '800x600' } },
+      pages: [{ name: 'app', url: `${origin}/`, selector: '#app' }],
+    });
+  const jfile = (...p: string[]) => path.join(tmp, '.pixelgate-jpeg', ...p);
+
+  it('jpeg baselines, ssim comparison, approve keeps the format', async () => {
+    buttonColor = '#2563eb';
+    const first = await run(cfg());
+    assert.equal(first.summary.added, 1, JSON.stringify(first.results));
+    assert.ok(existsSync(jfile('baseline', `desktop-${platform}`, 'app.jpg')));
+
+    assert.equal((await run(cfg())).summary.unchanged, 1, 'jpeg re-capture is stable');
+
+    buttonColor = '#16a34a';
+    const changed = await run(cfg());
+    const r = changed.results[0]!;
+    assert.equal(r.status, 'changed', JSON.stringify(r));
+    assert.match(r.message!, /^SSIM below 0\.8 in/);
+    assert.equal(r.current, `current/desktop-${platform}/app.jpg`);
+    assert.equal(r.diff, `diff/desktop-${platform}/app.png`);
+
+    await approve(cfg());
+    assert.equal((await run(cfg())).summary.unchanged, 1);
+  });
+});
+
 describe('stability loop', () => {
   const single = (name: string, url: string, stableTimeoutMs?: number) =>
     cfgWith({ pages: [{ name, url }], targets: { desktop: { viewport: '400x200' } }, stabilize: { stableTimeoutMs } });

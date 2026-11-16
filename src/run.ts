@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { captureAll, type CaptureResult } from './capture.js';
-import { compareImages } from './compare.js';
+import { createMatcher, type Matcher } from './compare.js';
 import type { PageSnap, ResolvedConfig } from './config.js';
 import { resolveUrl, safeName } from './names.js';
 import { applyOutcome, determineOutcome, toResult } from './outcome.js';
@@ -36,30 +36,35 @@ export async function run(cfg: ResolvedConfig, opts: RunOptions = {}): Promise<R
 
 const readIfExists = (file: string) => (existsSync(file) ? readFile(file) : Promise.resolve(null));
 
+export function matcherFor(cfg: ResolvedConfig): Matcher {
+  return createMatcher({ codec: cfg.codec, comparator: cfg.comparator.fn, options: cfg.comparator.options });
+}
+
 async function runAgainst(cfg: ResolvedConfig, opts: RunOptions, baseUrl: string | undefined): Promise<Report> {
   const snaps = await collectSnaps(cfg, opts.only, baseUrl);
   await rm(path.join(cfg.outDir, 'current'), { recursive: true, force: true });
   await rm(path.join(cfg.outDir, 'diff'), { recursive: true, force: true });
 
+  const matcher = matcherFor(cfg);
+  const ext = `.${cfg.codec.extension}`;
   const results: SnapshotResult[] = [];
   const seen = new Set<string>();
 
-  await captureAll(cfg, snaps, {
-    reference: (dir, name) => readIfExists(baselinePath(cfg, dir, name)),
+  await captureAll(cfg, snaps, matcher, {
+    reference: (dir, name) => readIfExists(baselinePath(cfg, dir, name, ext)),
     async onCapture(c: CaptureResult) {
-      seen.add(`${c.target}/${safeName(c.name)}.png`);
+      seen.add(`${c.target}/${safeName(c.name)}${ext}`);
       const paths = {
-        baseline: baselinePath(cfg, c.target, c.name),
-        current: currentPath(cfg, c.target, c.name),
+        baseline: baselinePath(cfg, c.target, c.name, ext),
+        current: currentPath(cfg, c.target, c.name, ext),
         diff: diffPath(cfg, c.target, c.name),
       };
-      const outcome = determineOutcome({
+      const outcome = await determineOutcome({
         shot: c.shot,
         error: c.error,
         reference: c.reference,
         update: cfg.update,
-        maxDiffPixelRatio: cfg.maxDiffPixelRatio,
-        compare: (a, b) => compareImages(a, b, { threshold: cfg.threshold }),
+        compare: matcher.compare,
       });
       await applyOutcome(outcome, paths);
       const r = toResult(outcome, {
@@ -82,8 +87,8 @@ async function runAgainst(cfg: ResolvedConfig, opts: RunOptions, baseUrl: string
       const dir = path.join(cfg.outDir, 'baseline', t.dir);
       if (!existsSync(dir)) continue;
       for (const f of await readdir(dir)) {
-        if (f.endsWith('.png') && !seen.has(`${t.dir}/${f}`)) {
-          results.push({ target: t.dir, name: f.slice(0, -4), status: 'removed', baseline: rel(cfg, path.join(dir, f)) });
+        if (f.endsWith(ext) && !seen.has(`${t.dir}/${f}`)) {
+          results.push({ target: t.dir, name: f.slice(0, -ext.length), status: 'removed', baseline: rel(cfg, path.join(dir, f)) });
         }
       }
     }

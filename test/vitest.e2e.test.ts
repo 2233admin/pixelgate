@@ -68,6 +68,9 @@ describe('vitest adapter', () => {
     assert.equal(res.diff, `diff/${target}/card.browser.ts_card.png`);
     assert.ok(existsSync(path.join(outDir, res.current!)));
     assert.ok(existsSync(path.join(outDir, res.diff!)));
+    // Blue card -> red card: almost every pixel differs; the reporter measures it.
+    assert.ok(res.diffRatio! > 0.9, JSON.stringify(res));
+    assert.match(res.message!, /pixels \(ratio 0\.9\d+\) differ/);
   });
 
   it('pixelgate approve accepts it and Vitest passes again', async () => {

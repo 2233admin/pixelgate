@@ -1,5 +1,5 @@
 import { chromium, firefox, webkit, type BrowserType, type Page } from 'playwright';
-import { imagesMatch, type MatchOptions } from './compare.js';
+import { pngCodec, type Codec, type Matcher } from './compare.js';
 import type { PageSnap, ResolvedConfig, ResolvedTarget } from './config.js';
 import { safeName } from './names.js';
 
@@ -36,20 +36,24 @@ export interface StableShot {
 export async function stableShot(
   take: () => Promise<Buffer>,
   reference: Buffer | null,
-  opts: MatchOptions & { timeoutMs: number },
+  opts: { same: Matcher['same']; timeoutMs: number; intervalMs?: number },
 ): Promise<StableShot> {
   const first = await take();
-  if (reference && imagesMatch(reference, first, opts)) {
+  if (reference && (await opts.same(reference, first))) {
     return { buffer: first, stable: true, matchedReference: true, retries: 0 };
   }
   if (opts.timeoutMs <= 0) return { buffer: first, stable: true, matchedReference: false, retries: 0 };
 
   const deadline = Date.now() + opts.timeoutMs;
+  const interval = opts.intervalMs ?? 0;
   let previous = first;
   let retries = 0;
   while (Date.now() < deadline) {
+    // A screenshot can take ~15 ms, faster than a 30 ms JS ticker: back-to-back
+    // shots may catch the same frame and look "stable". Space them out.
+    if (interval > 0) await new Promise((r) => setTimeout(r, interval));
     const next = await take();
-    if (imagesMatch(previous, next, opts)) return { buffer: next, stable: true, matchedReference: false, retries };
+    if (await opts.same(previous, next)) return { buffer: next, stable: true, matchedReference: false, retries };
     previous = next;
     retries++;
   }
@@ -85,11 +89,20 @@ async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise
   if (stabilize.waitMs) await page.waitForTimeout(stabilize.waitMs);
 }
 
-function shooter(page: Page, snap: PageSnap, timeoutMs: number): () => Promise<Buffer> {
-  const opts = { animations: 'disabled' as const, caret: 'hide' as const, timeout: timeoutMs };
-  return snap.selector
+/** Screenshots in the codec's format: natively when Playwright supports it, else PNG re-encoded. */
+function shooter(page: Page, snap: PageSnap, timeoutMs: number, codec: Codec): () => Promise<Buffer> {
+  const native = codec.screenshot;
+  const opts = {
+    animations: 'disabled' as const,
+    caret: 'hide' as const,
+    timeout: timeoutMs,
+    type: native?.type ?? 'png',
+    ...(native?.type === 'jpeg' && native.quality !== undefined ? { quality: native.quality } : {}),
+  };
+  const raw = snap.selector
     ? () => page.locator(snap.selector!).first().screenshot(opts)
     : () => page.screenshot({ ...opts, fullPage: snap.fullPage ?? true });
+  return native ? raw : async () => codec.encode(pngCodec.decode(await raw()));
 }
 
 async function pool<T>(items: T[], size: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -107,8 +120,7 @@ export interface CaptureHooks {
   onCapture(result: CaptureResult): Promise<void>;
 }
 
-export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], hooks: CaptureHooks): Promise<void> {
-  const match = { threshold: cfg.threshold, maxDiffPixelRatio: cfg.maxDiffPixelRatio };
+export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], matcher: Matcher, hooks: CaptureHooks): Promise<void> {
   for (const target of cfg.targets) {
     const browser = await ENGINES[target.browser].launch();
     try {
@@ -128,9 +140,10 @@ export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], hooks: 
         const r: CaptureResult = { target: target.dir, name: snap.name, reference, pageErrors };
         try {
           await prepare(page, snap, cfg);
-          r.shot = await stableShot(shooter(page, snap, cfg.timeoutMs), reference, {
-            ...match,
+          r.shot = await stableShot(shooter(page, snap, cfg.timeoutMs, matcher.codec), reference, {
+            same: matcher.same,
             timeoutMs: cfg.stabilize.stableTimeoutMs,
+            intervalMs: cfg.stabilize.stableIntervalMs,
           });
         } catch (e) {
           r.error = e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e);

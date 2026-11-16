@@ -8,7 +8,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { StableShot } from './capture.js';
-import { passes, type CompareResult } from './compare.js';
+import type { CompareResult } from './compare.js';
 import type { UpdateMode } from './config.js';
 import { rel, type OutDir, type SnapshotResult } from './report.js';
 
@@ -28,11 +28,12 @@ export interface OutcomeInput {
   error?: string;
   reference: Buffer | null;
   update: UpdateMode;
-  maxDiffPixelRatio: number;
-  compare: (reference: Buffer, actual: Buffer) => CompareResult;
+  /** The configured comparator (via `Matcher.compare`); its `pass` decides. */
+  compare: (reference: Buffer, actual: Buffer) => Promise<CompareResult>;
 }
 
-export function determineOutcome(input: OutcomeInput): Outcome {
+/** All branching lives here; the only async work is the comparison itself. */
+export async function determineOutcome(input: OutcomeInput): Promise<Outcome> {
   const { shot, reference, update } = input;
   if (input.error || !shot) return { type: 'capture-error', error: input.error ?? 'no screenshot produced' };
   if (!shot.stable) return { type: 'unstable', actual: shot.buffer, retries: shot.retries };
@@ -40,8 +41,8 @@ export function determineOutcome(input: OutcomeInput): Outcome {
     return { type: 'missing-reference', location: update === 'none' ? 'current' : 'baseline', actual: shot.buffer };
   }
   if (shot.matchedReference) return { type: 'matched-immediately' };
-  const compare = input.compare(reference, shot.buffer);
-  if (passes(compare, input.maxDiffPixelRatio)) return { type: 'matched-after-comparison', compare };
+  const compare = await input.compare(reference, shot.buffer);
+  if (compare.pass) return { type: 'matched-after-comparison', compare };
   if (update === 'all') return { type: 'update-reference', actual: shot.buffer, compare };
   return { type: 'mismatch', actual: shot.buffer, compare };
 }
@@ -68,7 +69,7 @@ export async function applyOutcome(outcome: Outcome, paths: SnapshotPaths): Prom
       break;
     case 'mismatch':
       await put(paths.current, outcome.actual);
-      await put(paths.diff, outcome.compare.diffPng);
+      if (outcome.compare.diffPng) await put(paths.diff, outcome.compare.diffPng);
       break;
     case 'unstable':
       // Keep the last frame so the reviewer can see what kept moving.
@@ -88,6 +89,7 @@ export function toResult(
     r.diffPixels = c.diffPixels;
     r.diffRatio = c.diffRatio;
     r.sizeChanged = c.sizeChanged;
+    if (c.message) r.message = c.message;
   };
   switch (outcome.type) {
     case 'capture-error':
@@ -117,7 +119,7 @@ export function toResult(
     case 'mismatch':
       r.status = 'changed';
       r.current = rel(o, paths.current);
-      r.diff = rel(o, paths.diff);
+      if (outcome.compare.diffPng) r.diff = rel(o, paths.diff);
       metrics(outcome.compare);
       break;
   }

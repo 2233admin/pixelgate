@@ -189,7 +189,10 @@ test('primary button', async () => {
   (`pixelgateScreenshots({ platformSpecific: false })` drops the platform)
 - On a mismatch Vitest fails the test; the new screenshot goes to
   `.pixelgate/current/`, the diff to `.pixelgate/diff/`.
-- After each run the reporter writes `.pixelgate/report/`. Review it, then
+- After each run the reporter writes `.pixelgate/report/`, with the changed
+  share and pixel count of each mismatch (measured by pixelgate with
+  pixelmatch at threshold 0.1; Vitest's own comparator still decides
+  pass/fail). Review it, then
   `pixelgate approve` (no pixelgate config needed; `--out-dir` if you moved it),
   or `vitest -u` to accept everything.
 
@@ -210,9 +213,12 @@ Before every capture pixelgate:
 - then captures until the page holds still, like Vitest's `toMatchScreenshot`:
   if the first screenshot matches the baseline it's done (one capture, no
   decode when the bytes are identical); otherwise it keeps capturing until two
-  consecutive screenshots match. A page still moving after
-  `stabilize.stableTimeoutMs` (default 5000, `0` = single shot) is reported as
-  an `error` with its last frame in `current/`, instead of a flaky `changed`.
+  consecutive screenshots match. Captures are spaced
+  `stabilize.stableIntervalMs` apart (default 100): a screenshot can take
+  ~15 ms, faster than a 30 ms JS ticker, and back-to-back shots would catch
+  the same frame. A page still moving after `stabilize.stableTimeoutMs`
+  (default 5000, `0` = single shot) is reported as an `error` with its last
+  frame in `current/`, instead of a flaky `changed`.
 
 CSS can stop animations but not JavaScript timers (tickers, carousels, data
 arriving late); the stability loop is what covers those.

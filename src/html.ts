@@ -87,6 +87,7 @@ function card(r) {
   const meta = [r.target];
   if (r.diffRatio != null && (r.status === 'changed' || r.status === 'updated')) meta.push((r.diffRatio * 100).toFixed(3) + '% px (' + r.diffPixels + ')');
   if (r.sizeChanged) meta.push('size changed');
+  if (r.message && !r.sizeChanged) meta.push(r.message);
   const head = el('div', { class: 'head' }, [
     el('span', { class: 'tag', style: 'color:var(--' + r.status + ')', text: r.status }),
     el('span', { class: 'name', text: r.name }),

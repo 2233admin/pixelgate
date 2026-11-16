@@ -7,9 +7,10 @@
  * works on Vitest results too.
  */
 import { existsSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { Reporter, Vitest } from 'vitest/node';
+import { createMatcher, pixelmatchComparator } from './compare.js';
 import { targetDir } from './config.js';
 import { baselinePath, buildReport, currentPath, diffPath, rel, reportDir, writeReport, type SnapshotResult } from './report.js';
 
@@ -79,7 +80,14 @@ export function pixelgateScreenshots(opts: PixelgateVitestOptions = {}) {
   };
 }
 
-export function classify(seen: Seen): SnapshotResult {
+/**
+ * Vitest decides pass/fail; for the review page we also want "how much".
+ * Its artifacts can't be tied back to a snapshot reliably (attachment paths are
+ * rewritten into its attachments dir), so measure baseline vs current here.
+ */
+const measure = createMatcher({ comparator: pixelmatchComparator, options: { threshold: 0.1 } });
+
+export async function classify(seen: Seen): Promise<SnapshotResult> {
   const o = { outDir: seen.outDir };
   const base = baselinePath(o, seen.target, seen.name);
   const cur = currentPath(o, seen.target, seen.name);
@@ -90,8 +98,18 @@ export function classify(seen: Seen): SnapshotResult {
   if (existsSync(cur)) r.current = rel(o, cur);
   if (existsSync(dif)) r.diff = rel(o, dif);
 
-  if (r.current && hasBase) r.status = 'changed';
-  else if (r.current) r.status = 'added';
+  if (r.current && hasBase) {
+    r.status = 'changed';
+    try {
+      const m = await measure.compare(await readFile(base), await readFile(cur));
+      r.diffPixels = m.diffPixels;
+      r.diffRatio = m.diffRatio;
+      r.sizeChanged = m.sizeChanged;
+      if (m.message) r.message = m.message;
+    } catch {
+      // Unreadable/non-PNG file: keep the row, just without numbers.
+    }
+  } else if (r.current) r.status = 'added';
   // Outside CI Vitest writes a missing reference straight to the baseline path.
   else if (hasBase && !seen.baselineExisted) r.status = 'added';
   else if (!hasBase) {
@@ -121,7 +139,7 @@ export class PixelgateReporter implements Reporter {
   }
 
   async onTestRunEnd(): Promise<void> {
-    const results = [...registry.values()].filter((s) => s.outDir === this.outDir).map(classify);
+    const results = await Promise.all([...registry.values()].filter((s) => s.outDir === this.outDir).map(classify));
     if (results.length === 0) return;
     const report = buildReport(results, ['changed', 'error']);
     await writeReport({ outDir: this.outDir }, report);

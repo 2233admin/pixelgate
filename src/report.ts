@@ -22,6 +22,8 @@ export interface SnapshotResult {
   diffPixels?: number;
   diffRatio?: number;
   sizeChanged?: boolean;
+  /** Comparator's explanation, e.g. `SSIM 0.9731 < 0.99`. */
+  message?: string;
   error?: string;
   pageErrors?: string[];
 }
@@ -36,10 +38,11 @@ export interface Report {
 }
 
 export const rel = (o: OutDir, p: string) => path.relative(o.outDir, p).split(path.sep).join('/');
-export const baselinePath = (o: OutDir, target: string, name: string) =>
-  path.join(o.outDir, 'baseline', target, `${safeName(name)}.png`);
-export const currentPath = (o: OutDir, target: string, name: string) =>
-  path.join(o.outDir, 'current', target, `${safeName(name)}.png`);
+/** `ext` includes the dot. Diffs are always `.png`. */
+export const baselinePath = (o: OutDir, target: string, name: string, ext = '.png') =>
+  path.join(o.outDir, 'baseline', target, `${safeName(name)}${ext}`);
+export const currentPath = (o: OutDir, target: string, name: string, ext = '.png') =>
+  path.join(o.outDir, 'current', target, `${safeName(name)}${ext}`);
 export const diffPath = (o: OutDir, target: string, name: string) =>
   path.join(o.outDir, 'diff', target, `${safeName(name)}.png`);
 export const reportDir = (o: OutDir) => path.join(o.outDir, 'report');
@@ -90,12 +93,14 @@ export async function approve(o: OutDir, opts: ApproveOptions = {}): Promise<Sna
   for (const r of report.results) {
     if (opts.only?.length && !matchesAny(r.name, opts.only)) continue;
     if (r.status === 'changed' || r.status === 'added') {
-      const src = currentPath(o, r.target, r.name);
-      // Vitest writes a brand-new reference straight to baseline; nothing to copy then.
-      if (existsSync(src)) {
-        const dest = baselinePath(o, r.target, r.name);
+      // Paths come from the report, so the file format (png/jpg/...) is whatever the run wrote.
+      // Mode `new` and Vitest write a brand-new reference straight to baseline; nothing to copy then.
+      const src = r.current && path.join(o.outDir, r.current);
+      if (src && existsSync(src)) {
+        const dest = path.join(o.outDir, 'baseline', r.target, path.basename(src));
         await mkdir(path.dirname(dest), { recursive: true });
         await copyFile(src, dest);
+        r.baseline = rel(o, dest);
       }
       done.push(r);
     } else if (r.status === 'removed' && opts.prune && r.baseline) {
@@ -108,11 +113,7 @@ export async function approve(o: OutDir, opts: ApproveOptions = {}): Promise<Sna
   const approved = new Set(done.map(key));
   const results = report.results
     .filter((r) => !(r.status === 'removed' && approved.has(key(r))))
-    .map((r) =>
-      approved.has(key(r))
-        ? { ...r, status: 'unchanged' as const, baseline: rel(o, baselinePath(o, r.target, r.name)), diff: undefined }
-        : r,
-    );
+    .map((r) => (approved.has(key(r)) ? { ...r, status: 'unchanged' as const, diff: undefined } : r));
   await writeReport(o, { ...report, ...summarize(results, report.failOn), results });
   return done;
 }
