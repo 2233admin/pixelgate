@@ -281,19 +281,43 @@ export function maskSelectors(cfg: Pick<ResolvedConfig, 'mask'>, snap: Pick<Page
   return [...cfg.mask, ...(snap.mask ?? []), ...(target.hideBehavior === 'ignore' ? [`[${HIDE_ATTR}]`] : [])];
 }
 
+/** Holds an element's own `aria-hidden` (JSON, `null` = none) while `captureAria` overrides it. */
+const ARIA_WAS_ATTR = 'data-pixelgate-was-aria-hidden';
+
 /**
- * The accessibility tree of what the screenshot captured: the selector's first match, or
- * the body. Hidden (`data-pixelgate-hide`) and masked elements are left out (`aria-hidden`),
- * since their content is what changes between runs. Runs last: it leaves those attributes.
+ * The accessibility tree of what the screenshot captured: the element, or the body. Hidden
+ * (`data-pixelgate-hide`) and masked elements are left out (`aria-hidden`), since their
+ * content is what changes between runs. Their own `aria-hidden` is restored afterwards: in
+ * Playwright Test the page lives on for more steps and screenshots.
  */
 export async function captureAria(page: Page, snap: CaptureSnap, cfg: ResolvedConfig, target: ResolvedTarget): Promise<string> {
   const hidden = [...new Set([`[${HIDE_ATTR}]`, ...maskSelectors(cfg, snap, target)])].map((s) => page.locator(s));
-  for (const l of [...hidden, ...(snap.maskLocators ?? [])]) {
-    await l.evaluateAll((els) => els.forEach((e) => e.setAttribute('aria-hidden', 'true')));
+  try {
+    for (const l of [...hidden, ...(snap.maskLocators ?? [])]) {
+      await l.evaluateAll(
+        (els, was) =>
+          els.forEach((e) => {
+            if (!e.hasAttribute(was)) e.setAttribute(was, JSON.stringify(e.getAttribute('aria-hidden')));
+            e.setAttribute('aria-hidden', 'true');
+          }),
+        ARIA_WAS_ATTR,
+      );
+    }
+    const root = rootOf(page, snap) ?? page.locator('body');
+    // `ariaSnapshot` has no timeout by default.
+    return normalizeAria(await root.ariaSnapshot({ timeout: cfg.timeoutMs }));
+  } finally {
+    await page.locator(`[${ARIA_WAS_ATTR}]`).evaluateAll(
+      (els, was) =>
+        els.forEach((e) => {
+          const before = JSON.parse(e.getAttribute(was) ?? 'null') as string | null;
+          if (before === null) e.removeAttribute('aria-hidden');
+          else e.setAttribute('aria-hidden', before);
+          e.removeAttribute(was);
+        }),
+      ARIA_WAS_ATTR,
+    );
   }
-  const root = rootOf(page, snap) ?? page.locator('body');
-  // `ariaSnapshot` has no timeout by default.
-  return normalizeAria(await root.ariaSnapshot({ timeout: cfg.timeoutMs }));
 }
 
 export interface Box {

@@ -11,7 +11,8 @@ import path from 'node:path';
 import type { FullConfig, FullResult, Reporter, TestCase, TestResult } from '@playwright/test/reporter';
 import type { FailOn } from './config.js';
 import { ATTACHMENT, outDirOf, type PixelgateAttachment, type PixelgateOptions } from './playwright-shared.js';
-import { buildReport, reportDir, writeReport, type SnapshotResult } from './report.js';
+import { safeName } from './names.js';
+import { buildReport, reportDir, summarize, writeReport, type SnapshotResult } from './report.js';
 
 interface Row {
   outDir: string;
@@ -57,7 +58,8 @@ export default class PixelgatePlaywrightReporter implements Reporter {
     for (const a of result.attachments) {
       if (a.name !== ATTACHMENT || !a.body) continue;
       const data = JSON.parse(a.body.toString('utf8')) as PixelgateAttachment;
-      const key = `${data.outDir}\0${data.result.target}\0${data.result.name}`;
+      // Keyed by file: names that map to the same file (`a/b`, `a_b`) collide.
+      const key = `${data.outDir}\0${data.result.target}\0${safeName(data.result.name)}`;
       const title = test.titlePath().filter(Boolean).join(' > ');
       const other = this.rows.get(key);
       if (other && other.test !== test.id) {
@@ -87,6 +89,8 @@ export default class PixelgatePlaywrightReporter implements Reporter {
         rows.map((r) => r.result),
         failOn,
       );
+      // Projects sharing an out dir keep their own `failOn`: each row is judged by its own.
+      report.failed = rows.some((r) => summarize([r.result], r.failOn).failed);
       await writeReport({ outDir }, report);
       const s = report.summary;
       process.stderr.write(

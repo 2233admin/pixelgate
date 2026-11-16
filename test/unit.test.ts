@@ -752,6 +752,25 @@ describe('playwright test integration', () => {
       assert.equal(by.x!.status, 'unchanged');
       assert.equal(by.y!.status, 'error');
       assert.match(by.y!.error!, /more than one test: a\.spec\.ts > b; a\.spec\.ts > c/);
+
+      // Different names, same file: a collision too. Each row keeps its own failOn.
+      const rep2 = new PixelgatePlaywrightReporter();
+      const row = (name: string, status: SnapshotResult['status'], failOn: string[]) => ({
+        name: 'pixelgate-result',
+        contentType: 'application/json',
+        body: Buffer.from(JSON.stringify({ outDir, failOn, result: { target: 'desktop', name, status } })),
+      });
+      const end2 = (id: string, ...a: ReturnType<typeof row>[]) => rep2.onTestEnd(tc(id), { attachments: a } as unknown as TestResult);
+      end2('d', row('card/expanded', 'unchanged', ['error']));
+      end2('e', row('card_expanded', 'unchanged', ['error']));
+      end2('f', row('lenient', 'changed', []));
+      assert.deepEqual(await rep2.onEnd({ status: 'passed' } as FullResult), { status: 'failed' });
+      assert.equal((await readReport({ outDir })).results.find((r) => r.name === 'card_expanded' || r.name === 'card/expanded')!.status, 'error');
+
+      const rep3 = new PixelgatePlaywrightReporter();
+      rep3.onTestEnd(tc('g'), { attachments: [row('lenient', 'changed', []), row('strict', 'unchanged', ['changed'])] } as unknown as TestResult);
+      assert.equal(await rep3.onEnd({ status: 'passed' } as FullResult), undefined, "a changed row in a project with failOn [] does not fail the run");
+      assert.equal((await readReport({ outDir })).failed, false);
     } finally {
       if (env === undefined) delete process.env[REPORTER_ENV];
       else process.env[REPORTER_ENV] = env;

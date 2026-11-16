@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { afterAll, beforeAll, describe, it } from 'vitest';
-import { elementBox, forcePseudoClasses } from '../src/capture.js';
+import { captureAria, elementBox, forcePseudoClasses } from '../src/capture.js';
 import { pngCodec } from '../src/compare.js';
 import { resolveConfig, type Config, type ResolvedConfig, type UpdateMode } from '../src/config.js';
 import { approve } from '../src/report.js';
@@ -538,6 +538,25 @@ describe('in-page helpers (chromium)', () => {
       assert.deepEqual(await page.locator('#edge').evaluate(elementBox, true), { x: 0, y: 0, width: 32, height: 32 });
       // scale(2) around the centre: border box 190..230, the 4px outline drawn 8px wide.
       assert.deepEqual(await page.locator('#scaled').evaluate(elementBox, true), { x: 182, y: 182, width: 56, height: 56 });
+    } finally {
+      await browser.close();
+    }
+  });
+
+  it('captureAria leaves hidden and masked elements out, then restores their own aria-hidden', async () => {
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      await page.setContent(`<h1>Title</h1><span data-pixelgate-hide>tick</span><b class="m" aria-hidden="false">masked</b><i class="n">located</i>`);
+      const cfg = resolveConfig({ pages: [{ name: 'p', url: 'about:blank' }], mask: ['.m'] }, tmp);
+      const yml = await captureAria(page, { name: 'p', maskLocators: [page.locator('.n')] }, cfg, cfg.targets[0]!);
+      assert.match(yml, /heading "Title"/);
+      assert.doesNotMatch(yml, /tick|masked|located/, yml);
+      const attrs = await page.evaluate(() =>
+        ['[data-pixelgate-hide]', '.m', '.n'].map((s) => document.querySelector(s)!.getAttribute('aria-hidden')),
+      );
+      assert.deepEqual(attrs, [null, 'false', null]);
+      assert.equal(await page.locator('[data-pixelgate-was-aria-hidden]').count(), 0);
     } finally {
       await browser.close();
     }

@@ -16,6 +16,7 @@ import { createMatcher } from './compare.js';
 import type { ResolvedConfig } from './config.js';
 import { ATTACHMENT, configFor, type PixelgateAttachment, type PixelgateOptions } from './playwright-shared.js';
 import { recordCapture } from './record.js';
+import { safeName } from './names.js';
 import { baselinePath, type SnapshotResult } from './report.js';
 
 export { expect } from '@playwright/test';
@@ -83,8 +84,9 @@ export const test = base.extend<{ pixelgateOptions: PixelgateOptions; pixelgate:
 
     await use({
       async screenshot(name, opts = {}) {
-        if (names.has(name)) throw new Error(`pixelgate.screenshot("${name}") twice in one test: the name is the file name`);
-        names.add(name);
+        // Names that map to the same file (`a/b`, `a_b`) are the same snapshot.
+        if (names.has(safeName(name))) throw new Error(`pixelgate.screenshot("${name}"): a snapshot with this file name was already taken in this test`);
+        names.add(safeName(name));
         const snap: CaptureSnap = {
           name,
           fullPage: opts.fullPage,

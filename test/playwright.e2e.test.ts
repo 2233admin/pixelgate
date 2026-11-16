@@ -41,7 +41,16 @@ const clean = async () => {
   await rm(path.join(app, 'test-results'), { recursive: true, force: true });
 };
 beforeAll(clean);
-afterAll(clean);
+// In CI the output stays for the failure artifact.
+afterAll(async () => {
+  if (!process.env.CI) await clean();
+});
+
+/** The report's non-unchanged rows, for assertion messages. */
+const why = async () =>
+  JSON.stringify(
+    (await readReport({ outDir }).catch(() => undefined))?.results.filter((x) => x.status !== 'unchanged') ?? 'no report',
+  );
 
 describe('playwright test fixture', () => {
   it('first run writes the baselines (screenshot and ARIA) and passes', async () => {
@@ -55,7 +64,7 @@ describe('playwright test fixture', () => {
 
   it('unchanged UI passes; the hidden timestamp changes neither pixels nor the ARIA tree', async () => {
     const r = playwright();
-    assert.equal(r.status, 0, r.output);
+    assert.equal(r.status, 0, r.output + (await why()));
     assert.equal((await readReport({ outDir })).summary.unchanged, 2, r.output);
   });
 
@@ -75,7 +84,7 @@ describe('playwright test fixture', () => {
   it('pixelgate approve accepts it and the run passes again', async () => {
     assert.equal((await approve({ outDir })).length, 2);
     const r = playwright({ CARD_COLOR: '#dc2626' });
-    assert.equal(r.status, 0, r.output);
+    assert.equal(r.status, 0, r.output + (await why()));
   });
 
   it('in CI a snapshot without baseline fails the run as added, and no baseline is written', async () => {
