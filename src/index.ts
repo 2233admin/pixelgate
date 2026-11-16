@@ -47,6 +47,21 @@ export { safeName, resolveUrl } from './names.js';
 export { storiesFromIndex, fetchStorybookPages } from './storybook.js';
 export { startVite, type RunningServer } from './vite.js';
 export { renderMarkdown, commentMarker, type MarkdownOptions } from './markdown.js';
+export {
+  explore,
+  parseTrace,
+  findCondition,
+  summarizeAction,
+  exitCodeFor,
+  renderExploreHtml,
+  isLocalOrigin,
+  parseDuration,
+  type ExploreOptions,
+  type ExploreResult,
+  type ExploreReport,
+  type ExploreState,
+  type ExploreViolation,
+} from './explore.js';
 export { run, collectSnaps, matcherFor, type RunOptions } from './run.js';
 export {
   approve,

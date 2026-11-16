@@ -1,0 +1,6 @@
+<!doctype html><html><head><title>throws</title></head><body>
+<h1>Explore fixture: throws</h1>
+<button id="ok" onclick="document.getElementById('out').textContent='ok '+Date.now()">OK</button>
+<button id="bad" onclick="setTimeout(() => { throw new Error('boom from bad button') }, 0)">Bad</button>
+<input id="name" placeholder="name"><p id="out"></p>
+</body></html>

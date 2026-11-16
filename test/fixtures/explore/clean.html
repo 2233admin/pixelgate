@@ -1,0 +1,7 @@
+<!doctype html><html><head><title>clean</title></head><body>
+<h1>Explore fixture: clean</h1>
+<!-- alert() blocks the page until the dialog is handled: the engine and Playwright must not deadlock on it. -->
+<button id="alert" onclick="alert('hello from the fixture')">Alert</button>
+<button id="count" onclick="document.getElementById('n').textContent = String(Number(document.getElementById('n').textContent) + 1)">Count</button>
+<input id="name" placeholder="name"><p>clicks: <span id="n">0</span></p>
+</body></html>
