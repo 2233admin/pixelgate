@@ -44,7 +44,7 @@ export const diffPath = (o: OutDir, target: string, name: string) =>
   path.join(o.outDir, 'diff', target, `${safeName(name)}.png`);
 export const reportDir = (o: OutDir) => path.join(o.outDir, 'report');
 
-const ORDER: Status[] = ['error', 'changed', 'removed', 'added', 'unchanged'];
+const ORDER: Status[] = ['error', 'changed', 'removed', 'added', 'updated', 'unchanged'];
 
 export function sortResults(results: SnapshotResult[]): SnapshotResult[] {
   return results.sort(
@@ -56,7 +56,7 @@ export function sortResults(results: SnapshotResult[]): SnapshotResult[] {
 }
 
 export function summarize(results: SnapshotResult[], failOn: Status[]): Pick<Report, 'summary' | 'failed'> {
-  const summary = { total: results.length, unchanged: 0, changed: 0, added: 0, removed: 0, error: 0 };
+  const summary = { total: results.length, unchanged: 0, changed: 0, added: 0, updated: 0, removed: 0, error: 0 };
   for (const r of results) summary[r.status]++;
   return { summary, failed: failOn.some((s) => summary[s] > 0) };
 }

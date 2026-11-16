@@ -21,6 +21,7 @@ const cfgFor = (mode: 'dev' | 'preview'): ResolvedConfig =>
       pages: [{ name: 'plans', url: '/', selector: '.card' }],
     },
     app,
+    { update: 'new' },
   );
 
 beforeAll(async () => {

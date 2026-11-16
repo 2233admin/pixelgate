@@ -67,6 +67,8 @@ export default defineConfig({
 
 ```bash
 pixelgate run          # capture + diff + report; exit 1 if the gate fails
+pixelgate run -u       # also overwrite baselines that changed (accept everything)
+pixelgate run --ci     # CI mode: write no baselines, fail on missing ones (automatic when CI is set)
 pixelgate approve      # accept changed/added snapshots from the last run as the new baseline
 pixelgate approve --only 'button--*'
 pixelgate approve --prune   # also delete baselines whose page/story is gone
@@ -81,17 +83,39 @@ Snapshot statuses:
 | --- | --- |
 | `unchanged` | matches baseline |
 | `changed` | pixels differ beyond tolerance, or size changed |
-| `added` | no baseline yet (passes by default; approve to record it) |
+| `added` | no baseline yet (see baseline modes) |
+| `updated` | baseline overwritten by `-u` |
 | `removed` | baseline exists but the page/story is gone |
-| `error` | page failed to load or screenshot timed out |
+| `error` | page failed to load, timed out, or never held still |
+
+### Baseline modes
+
+Same three modes as Vitest's `updateSnapshot` (`update` in the config, or the flags):
+
+| mode | when | missing baseline | mismatch |
+| --- | --- | --- | --- |
+| `new` | local default | written to `baseline/`, status `added`, passes | `changed`, fails |
+| `none` | `CI` set, or `--ci` | screenshot to `current/`, status `added`, **fails** | `changed`, fails |
+| `all` | `-u` | written to `baseline/` | baseline overwritten, `updated`, passes |
+
+So a new page or story can't slip through CI without a reviewed baseline.
+
+### Per-platform baselines
+
+Font rasterisation differs between Windows, macOS and Linux, so baselines live
+in `<target>-<platform>/` (e.g. `desktop-linux/`), as Vitest does in its file
+names. A Linux CI run never compares against baselines made on Windows: it
+reports them as missing instead of failing with noise. Create the CI
+platform's baselines from a CI run (`--ci` leaves them in `current/`, then
+`pixelgate approve`). Set `platformSpecific: false` to share one set.
 
 ### Files
 
 ```
 .pixelgate/
-  baseline/<target>/<name>.png   # commit this
-  current/<target>/<name>.png    # last run, git-ignored
-  diff/<target>/<name>.png       # red = changed pixels, git-ignored
+  baseline/<target>-<platform>/<name>.png   # commit this
+  current/<target>-<platform>/<name>.png    # last run, git-ignored
+  diff/<target>-<platform>/<name>.png       # red = changed pixels, git-ignored
   report/index.html              # open in a browser: side by side, diff, slider
   report/report.json             # machine-readable result
 ```
@@ -161,7 +185,8 @@ test('primary button', async () => {
 });
 ```
 
-- Reference: `.pixelgate/baseline/<browser>/<test-file>_<name>.png`
+- Reference: `.pixelgate/baseline/<browser>-<platform>/<test-file>_<name>.png`
+  (`pixelgateScreenshots({ platformSpecific: false })` drops the platform)
 - On a mismatch Vitest fails the test; the new screenshot goes to
   `.pixelgate/current/`, the diff to `.pixelgate/diff/`.
 - After each run the reporter writes `.pixelgate/report/`. Review it, then
@@ -181,10 +206,16 @@ Before every capture pixelgate:
 - waits for `load`, then up to 5 s for network idle, then `document.fonts.ready` and pending image decodes;
 - injects CSS that zeroes animations and transitions and hides the caret, and uses Playwright's `animations: 'disabled'`;
 - runs with `reducedMotion: 'reduce'`, `locale: en-US`, `timezoneId: UTC`, light colour scheme;
-- optionally freezes `Date.now()` (`stabilize.fixedTime`).
+- optionally freezes `Date.now()` (`stabilize.fixedTime`);
+- then captures until the page holds still, like Vitest's `toMatchScreenshot`:
+  if the first screenshot matches the baseline it's done (one capture, no
+  decode when the bytes are identical); otherwise it keeps capturing until two
+  consecutive screenshots match. A page still moving after
+  `stabilize.stableTimeoutMs` (default 5000, `0` = single shot) is reported as
+  an `error` with its last frame in `current/`, instead of a flaky `changed`.
 
-Render on the same OS and browser build as your baselines were made on. Font
-rasterisation differs between Windows, macOS and Linux; pin CI to one image.
+CSS can stop animations but not JavaScript timers (tickers, carousels, data
+arriving late); the stability loop is what covers those.
 
 ## CI
 
@@ -192,14 +223,14 @@ rasterisation differs between Windows, macOS and Linux; pin CI to one image.
 # .github/workflows/visual.yml
 - run: pnpm exec playwright install --with-deps chromium
 - run: pnpm build && (pnpm preview --port 5173 &) && npx wait-on http://localhost:5173
-- run: pnpm exec pixelgate run
+- run: pnpm exec pixelgate run        # CI is set, so this runs in mode none
 - if: failure()
   uses: actions/upload-artifact@v4
   with: { name: pixelgate-report, path: .pixelgate }
 ```
 
-To accept a change: run `pixelgate approve` locally (or download the artifact),
-commit the updated `.pixelgate/baseline/`, push.
+To accept a change: download the artifact (or reproduce locally on the same
+OS), `pixelgate approve`, commit the updated `.pixelgate/baseline/`, push.
 
 ## Programmatic API
 

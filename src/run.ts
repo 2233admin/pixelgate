@@ -1,18 +1,19 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { captureAll, type CaptureResult } from './capture.js';
 import { compareImages } from './compare.js';
 import type { PageSnap, ResolvedConfig } from './config.js';
 import { resolveUrl, safeName } from './names.js';
-import { baselinePath, buildReport, diffPath, rel, writeReport, type Report, type SnapshotResult } from './report.js';
+import { applyOutcome, determineOutcome, toResult } from './outcome.js';
+import { baselinePath, buildReport, currentPath, diffPath, rel, writeReport, type Report, type SnapshotResult } from './report.js';
 import { fetchStorybookPages, matchesAny } from './storybook.js';
 import { startVite } from './vite.js';
 
 export interface RunOptions {
   /** Only capture snapshots whose name matches one of these globs. */
   only?: string[];
-  onProgress?: (r: CaptureResult) => void;
+  onProgress?: (r: SnapshotResult) => void;
   /** Called once the Vite server (if any) is listening. */
   onServer?: (url: string) => void;
 }
@@ -33,52 +34,56 @@ export async function run(cfg: ResolvedConfig, opts: RunOptions = {}): Promise<R
   }
 }
 
+const readIfExists = (file: string) => (existsSync(file) ? readFile(file) : Promise.resolve(null));
+
 async function runAgainst(cfg: ResolvedConfig, opts: RunOptions, baseUrl: string | undefined): Promise<Report> {
   const snaps = await collectSnaps(cfg, opts.only, baseUrl);
   await rm(path.join(cfg.outDir, 'current'), { recursive: true, force: true });
   await rm(path.join(cfg.outDir, 'diff'), { recursive: true, force: true });
 
-  const captures = await captureAll(cfg, snaps, opts.onProgress);
   const results: SnapshotResult[] = [];
+  const seen = new Set<string>();
 
-  for (const c of captures) {
-    const base = baselinePath(cfg, c.target, c.name);
-    const r: SnapshotResult = { target: c.target, name: c.name, status: 'unchanged' };
-    if (c.pageErrors.length) r.pageErrors = c.pageErrors;
-    if (existsSync(base)) r.baseline = rel(cfg, base);
-    if (c.error || !c.file) {
-      r.status = 'error';
-      r.error = c.error ?? 'no screenshot produced';
-    } else {
-      r.current = rel(cfg, c.file);
-      if (!existsSync(base)) {
-        r.status = 'added';
-      } else {
-        const cmp = compareImages(await readFile(base), await readFile(c.file), { threshold: cfg.threshold });
-        r.diffPixels = cmp.diffPixels;
-        r.diffRatio = cmp.diffRatio;
-        r.sizeChanged = cmp.sizeChanged;
-        if (cmp.diffPixels > 0 && (cmp.sizeChanged || cmp.diffRatio > cfg.maxDiffPixelRatio)) {
-          r.status = 'changed';
-          const diffFile = diffPath(cfg, c.target, c.name);
-          await mkdir(path.dirname(diffFile), { recursive: true });
-          await writeFile(diffFile, cmp.diffPng);
-          r.diff = rel(cfg, diffFile);
-        }
-      }
-    }
-    results.push(r);
-  }
+  await captureAll(cfg, snaps, {
+    reference: (dir, name) => readIfExists(baselinePath(cfg, dir, name)),
+    async onCapture(c: CaptureResult) {
+      seen.add(`${c.target}/${safeName(c.name)}.png`);
+      const paths = {
+        baseline: baselinePath(cfg, c.target, c.name),
+        current: currentPath(cfg, c.target, c.name),
+        diff: diffPath(cfg, c.target, c.name),
+      };
+      const outcome = determineOutcome({
+        shot: c.shot,
+        error: c.error,
+        reference: c.reference,
+        update: cfg.update,
+        maxDiffPixelRatio: cfg.maxDiffPixelRatio,
+        compare: (a, b) => compareImages(a, b, { threshold: cfg.threshold }),
+      });
+      await applyOutcome(outcome, paths);
+      const r = toResult(outcome, {
+        o: cfg,
+        target: c.target,
+        name: c.name,
+        paths,
+        hadReference: c.reference !== null,
+        stableTimeoutMs: cfg.stabilize.stableTimeoutMs,
+      });
+      if (c.pageErrors.length) r.pageErrors = c.pageErrors;
+      results.push(r);
+      opts.onProgress?.(r);
+    },
+  });
 
   // Baselines with no matching snapshot this run. Skipped for filtered runs: absence proves nothing.
   if (!opts.only?.length) {
-    const live = new Set(captures.map((c) => `${c.target}/${safeName(c.name)}.png`));
     for (const t of cfg.targets) {
-      const dir = path.join(cfg.outDir, 'baseline', t.name);
+      const dir = path.join(cfg.outDir, 'baseline', t.dir);
       if (!existsSync(dir)) continue;
       for (const f of await readdir(dir)) {
-        if (f.endsWith('.png') && !live.has(`${t.name}/${f}`)) {
-          results.push({ target: t.name, name: f.slice(0, -4), status: 'removed', baseline: rel(cfg, path.join(dir, f)) });
+        if (f.endsWith('.png') && !seen.has(`${t.dir}/${f}`)) {
+          results.push({ target: t.dir, name: f.slice(0, -4), status: 'removed', baseline: rel(cfg, path.join(dir, f)) });
         }
       }
     }

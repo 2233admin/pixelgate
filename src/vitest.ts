@@ -10,11 +10,14 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 import type { Reporter, Vitest } from 'vitest/node';
+import { targetDir } from './config.js';
 import { baselinePath, buildReport, currentPath, diffPath, rel, reportDir, writeReport, type SnapshotResult } from './report.js';
 
 export interface PixelgateVitestOptions {
   /** Working directory, relative to the Vitest root. Default `.pixelgate`. */
   outDir?: string;
+  /** Separate baselines per OS: `<browser>-<platform>/`. Default true (Vitest does the same in its default file names). */
+  platformSpecific?: boolean;
 }
 
 /** Subset of Vitest's `PathResolveData` used here. */
@@ -23,6 +26,7 @@ export interface ScreenshotPathData {
   ext: string;
   root: string;
   browserName: string;
+  platform: string;
   testFileDirectory: string;
   testFileName: string;
 }
@@ -52,14 +56,16 @@ export function snapshotName(data: Pick<ScreenshotPathData, 'testFileDirectory' 
  * Value for `test.browser.expect.toMatchScreenshot` (spread it in if you set other options too).
  */
 export function pixelgateScreenshots(opts: PixelgateVitestOptions = {}) {
+  const dirOf = (data: ScreenshotPathData) => targetDir(data.browserName, opts.platformSpecific ?? true, data.platform);
   return {
     resolveScreenshotPath(data: ScreenshotPathData): string {
       const outDir = outDirOf(data.root, opts);
+      const target = dirOf(data);
       const name = snapshotName(data, data.arg);
-      const file = baselinePath({ outDir }, data.browserName, name);
-      const key = `${outDir}\0${data.browserName}\0${name}`;
+      const file = baselinePath({ outDir }, target, name);
+      const key = `${outDir}\0${target}\0${name}`;
       if (!registry.has(key)) {
-        registry.set(key, { outDir, target: data.browserName, name, baselineExisted: existsSync(file) });
+        registry.set(key, { outDir, target, name, baselineExisted: existsSync(file) });
       }
       return file;
     },
@@ -68,9 +74,7 @@ export function pixelgateScreenshots(opts: PixelgateVitestOptions = {}) {
       // Vitest asks for `<arg>-reference` (new screenshot, no baseline, CI), `<arg>-actual` and `<arg>-diff`.
       const m = /-(reference|actual|diff)$/.exec(data.arg);
       const name = snapshotName(data, m ? data.arg.slice(0, -m[0].length) : data.arg);
-      return m?.[1] === 'diff'
-        ? diffPath({ outDir }, data.browserName, name)
-        : currentPath({ outDir }, data.browserName, name);
+      return m?.[1] === 'diff' ? diffPath({ outDir }, dirOf(data), name) : currentPath({ outDir }, dirOf(data), name);
     },
   };
 }

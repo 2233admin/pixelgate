@@ -4,7 +4,15 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export type BrowserName = 'chromium' | 'firefox' | 'webkit';
-export type Status = 'unchanged' | 'changed' | 'added' | 'removed' | 'error';
+export type Status = 'unchanged' | 'changed' | 'added' | 'updated' | 'removed' | 'error';
+
+/**
+ * What to do with baselines (same three modes as Vitest's `updateSnapshot`):
+ * - `new`  (local default): write missing baselines, never touch existing ones.
+ * - `none` (CI default):    write nothing to baseline; a missing baseline is a failure.
+ * - `all`  (`-u`):          write missing baselines and overwrite mismatching ones.
+ */
+export type UpdateMode = 'new' | 'none' | 'all';
 
 export interface Target {
   /** Browser engine. Default `chromium`. */
@@ -64,6 +72,12 @@ export interface Stabilize {
   waitMs?: number;
   /** Freeze `Date.now()` to this ISO time. Default: off. */
   fixedTime?: string;
+  /**
+   * Keep capturing until two consecutive screenshots match (or one matches the
+   * baseline), for at most this long. Unstable pages are reported as errors.
+   * `0` = take a single screenshot. Default 5000.
+   */
+  stableTimeoutMs?: number;
 }
 
 export interface Config {
@@ -86,12 +100,24 @@ export interface Config {
   /** Navigation + readiness timeout per snapshot, ms. Default 30000. */
   timeoutMs?: number;
   stabilize?: Stabilize;
-  /** Statuses that make `run` exit non-zero. Default `['changed', 'error']`. */
+  /** Baseline update mode. Default: `none` when `CI` is set, else `new`. */
+  update?: UpdateMode;
+  /**
+   * Keep separate baselines per OS (`<target>-<platform>/`), since font
+   * rasterisation differs between Windows, macOS and Linux. Default true.
+   */
+  platformSpecific?: boolean;
+  /**
+   * Statuses that make `run` exit non-zero.
+   * Default `['changed', 'error']`, plus `'added'` when `update` is `none`.
+   */
   failOn?: Status[];
 }
 
 export interface ResolvedTarget {
   name: string;
+  /** Directory name under baseline/current/diff: `name`, or `name-platform`. */
+  dir: string;
   browser: BrowserName;
   width: number;
   height: number;
@@ -110,9 +136,27 @@ export interface ResolvedConfig {
   maxDiffPixelRatio: number;
   concurrency: number;
   timeoutMs: number;
-  stabilize: Stabilize;
+  stabilize: Stabilize & { stableTimeoutMs: number };
+  update: UpdateMode;
+  platformSpecific: boolean;
   failOn: Status[];
 }
+
+export interface ConfigOverrides {
+  update?: UpdateMode;
+}
+
+/** Same rule of thumb as Vitest/std-env: `CI` set to anything but `false`/`0`. */
+export function isCI(env: NodeJS.ProcessEnv = process.env): boolean {
+  const v = env.CI;
+  return (v !== undefined && v !== '' && v !== 'false' && v !== '0') || !!env.GITHUB_ACTIONS || !!env.GITLAB_CI;
+}
+
+export function targetDir(name: string, platformSpecific: boolean, platform: string = process.platform): string {
+  return platformSpecific ? `${name}-${platform}` : name;
+}
+
+const UPDATE_MODES: UpdateMode[] = ['new', 'none', 'all'];
 
 export function defineConfig(config: Config): Config {
   return config;
@@ -134,7 +178,11 @@ export function parseViewport(viewport: string): { width: number; height: number
 
 const BROWSERS: BrowserName[] = ['chromium', 'firefox', 'webkit'];
 
-export function resolveConfig(config: Config, rootDir: string): ResolvedConfig {
+export function resolveConfig(config: Config, rootDir: string, overrides: ConfigOverrides = {}): ResolvedConfig {
+  const update = overrides.update ?? config.update ?? (isCI() ? 'none' : 'new');
+  if (!UPDATE_MODES.includes(update)) throw new Error(`\`update\` must be one of ${UPDATE_MODES.join(', ')}`);
+  const platformSpecific = config.platformSpecific ?? true;
+
   const targetEntries = Object.entries(config.targets ?? { chromium: {} });
   if (targetEntries.length === 0) throw new Error('Config must define at least one target');
   const targets = targetEntries.map(([name, t]) => {
@@ -142,6 +190,7 @@ export function resolveConfig(config: Config, rootDir: string): ResolvedConfig {
     if (!BROWSERS.includes(browser)) throw new Error(`Target "${name}": unknown browser "${browser}"`);
     return {
       name,
+      dir: targetDir(name, platformSpecific),
       browser,
       ...parseViewport(t.viewport ?? '1280x720'),
       deviceScaleFactor: t.deviceScaleFactor ?? 1,
@@ -183,8 +232,10 @@ export function resolveConfig(config: Config, rootDir: string): ResolvedConfig {
     maxDiffPixelRatio: config.maxDiffPixelRatio ?? 0,
     concurrency: Math.max(1, config.concurrency ?? 4),
     timeoutMs: config.timeoutMs ?? 30_000,
-    stabilize: config.stabilize ?? {},
-    failOn: config.failOn ?? ['changed', 'error'],
+    stabilize: { ...config.stabilize, stableTimeoutMs: config.stabilize?.stableTimeoutMs ?? 5_000 },
+    update,
+    platformSpecific,
+    failOn: config.failOn ?? (update === 'none' ? ['changed', 'error', 'added'] : ['changed', 'error']),
   };
 }
 
@@ -193,7 +244,7 @@ export function findConfigFile(cwd: string): string | undefined {
   return CONFIG_FILES.map((f) => path.join(cwd, f)).find((f) => existsSync(f));
 }
 
-export async function loadConfig(cwd: string, explicit?: string): Promise<ResolvedConfig> {
+export async function loadConfig(cwd: string, explicit?: string, overrides: ConfigOverrides = {}): Promise<ResolvedConfig> {
   const file = explicit ? path.resolve(cwd, explicit) : findConfigFile(cwd);
   if (!file || !existsSync(file)) {
     throw new Error(`No config found. Create one of: ${CONFIG_FILES.join(', ')}`);
@@ -206,5 +257,5 @@ export async function loadConfig(cwd: string, explicit?: string): Promise<Resolv
     if (!mod.default) throw new Error(`${file} must have a default export`);
     raw = mod.default;
   }
-  return resolveConfig(raw, path.dirname(file));
+  return resolveConfig(raw, path.dirname(file), overrides);
 }

@@ -1,8 +1,9 @@
-import { mkdir } from 'node:fs/promises';
-import path from 'node:path';
 import { chromium, firefox, webkit, type BrowserType, type Page } from 'playwright';
+import { imagesMatch, type MatchOptions } from './compare.js';
 import type { PageSnap, ResolvedConfig, ResolvedTarget } from './config.js';
 import { safeName } from './names.js';
+
+export { safeName };
 
 const ENGINES: Record<ResolvedTarget['browser'], BrowserType> = { chromium, firefox, webkit };
 
@@ -16,18 +17,57 @@ export const STABILIZE_CSS = `
   scroll-behavior: auto !important;
 }`;
 
+export interface StableShot {
+  buffer: Buffer;
+  /** Two consecutive captures (or the first capture and the reference) matched. */
+  stable: boolean;
+  /** The very first capture matched the reference, so no comparison is needed later. */
+  matchedReference: boolean;
+  /** Extra captures taken before the page settled. */
+  retries: number;
+}
+
+/**
+ * Capture until the page holds still, the way Vitest's `toMatchScreenshot` does:
+ * the reference (when there is one) is the first image to compare against, so an
+ * unchanged page costs one screenshot; otherwise keep shooting until two
+ * consecutive captures match, or give up after `timeoutMs` and report unstable.
+ */
+export async function stableShot(
+  take: () => Promise<Buffer>,
+  reference: Buffer | null,
+  opts: MatchOptions & { timeoutMs: number },
+): Promise<StableShot> {
+  const first = await take();
+  if (reference && imagesMatch(reference, first, opts)) {
+    return { buffer: first, stable: true, matchedReference: true, retries: 0 };
+  }
+  if (opts.timeoutMs <= 0) return { buffer: first, stable: true, matchedReference: false, retries: 0 };
+
+  const deadline = Date.now() + opts.timeoutMs;
+  let previous = first;
+  let retries = 0;
+  while (Date.now() < deadline) {
+    const next = await take();
+    if (imagesMatch(previous, next, opts)) return { buffer: next, stable: true, matchedReference: false, retries };
+    previous = next;
+    retries++;
+  }
+  return { buffer: previous, stable: false, matchedReference: false, retries };
+}
+
 export interface CaptureResult {
+  /** Target directory name (`ResolvedTarget.dir`). */
   target: string;
   name: string;
-  file?: string;
+  shot?: StableShot;
+  reference: Buffer | null;
   error?: string;
   /** Uncaught page errors seen while rendering. */
   pageErrors: string[];
 }
 
-export { safeName };
-
-async function captureOne(page: Page, snap: PageSnap, cfg: ResolvedConfig, file: string): Promise<void> {
+async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise<void> {
   const { stabilize, timeoutMs } = cfg;
   if (stabilize.fixedTime) await page.clock.setFixedTime(new Date(stabilize.fixedTime));
   await page.goto(snap.url, { waitUntil: 'load', timeout: timeoutMs });
@@ -43,13 +83,13 @@ async function captureOne(page: Page, snap: PageSnap, cfg: ResolvedConfig, file:
     );
   });
   if (stabilize.waitMs) await page.waitForTimeout(stabilize.waitMs);
+}
 
-  const shotOpts = { path: file, animations: 'disabled' as const, caret: 'hide' as const, timeout: timeoutMs };
-  if (snap.selector) {
-    await page.locator(snap.selector).first().screenshot(shotOpts);
-  } else {
-    await page.screenshot({ ...shotOpts, fullPage: snap.fullPage ?? true });
-  }
+function shooter(page: Page, snap: PageSnap, timeoutMs: number): () => Promise<Buffer> {
+  const opts = { animations: 'disabled' as const, caret: 'hide' as const, timeout: timeoutMs };
+  return snap.selector
+    ? () => page.locator(snap.selector!).first().screenshot(opts)
+    : () => page.screenshot({ ...opts, fullPage: snap.fullPage ?? true });
 }
 
 async function pool<T>(items: T[], size: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -60,15 +100,16 @@ async function pool<T>(items: T[], size: number, fn: (item: T) => Promise<void>)
   await Promise.all(workers);
 }
 
-export async function captureAll(
-  cfg: ResolvedConfig,
-  snaps: PageSnap[],
-  onProgress?: (r: CaptureResult) => void,
-): Promise<CaptureResult[]> {
-  const results: CaptureResult[] = [];
+export interface CaptureHooks {
+  /** Current baseline image for a snapshot, or null. */
+  reference(targetDir: string, name: string): Promise<Buffer | null>;
+  /** Called once per snapshot as soon as it is captured (or failed). */
+  onCapture(result: CaptureResult): Promise<void>;
+}
+
+export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], hooks: CaptureHooks): Promise<void> {
+  const match = { threshold: cfg.threshold, maxDiffPixelRatio: cfg.maxDiffPixelRatio };
   for (const target of cfg.targets) {
-    const dir = path.join(cfg.outDir, 'current', target.name);
-    await mkdir(dir, { recursive: true });
     const browser = await ENGINES[target.browser].launch();
     try {
       const context = await browser.newContext({
@@ -80,26 +121,27 @@ export async function captureAll(
         timezoneId: 'UTC',
       });
       await pool(snaps, cfg.concurrency, async (snap) => {
-        const file = path.join(dir, `${safeName(snap.name)}.png`);
         const page = await context.newPage();
         const pageErrors: string[] = [];
         page.on('pageerror', (e) => pageErrors.push(e.message));
-        const r: CaptureResult = { target: target.name, name: snap.name, pageErrors };
+        const reference = await hooks.reference(target.dir, snap.name);
+        const r: CaptureResult = { target: target.dir, name: snap.name, reference, pageErrors };
         try {
-          await captureOne(page, snap, cfg, file);
-          r.file = file;
+          await prepare(page, snap, cfg);
+          r.shot = await stableShot(shooter(page, snap, cfg.timeoutMs), reference, {
+            ...match,
+            timeoutMs: cfg.stabilize.stableTimeoutMs,
+          });
         } catch (e) {
           r.error = e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e);
         } finally {
           await page.close();
         }
-        results.push(r);
-        onProgress?.(r);
+        await hooks.onCapture(r);
       });
       await context.close();
     } finally {
       await browser.close();
     }
   }
-  return results;
 }

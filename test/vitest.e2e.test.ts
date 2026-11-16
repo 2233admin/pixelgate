@@ -14,6 +14,7 @@ const app = fileURLToPath(new URL('./fixtures/vitest-app/', import.meta.url));
 const outDir = path.join(app, '.pixelgate');
 const theme = path.join(app, 'theme.json');
 const vitestBin = path.join(path.dirname(createRequire(import.meta.url).resolve('vitest/package.json')), 'vitest.mjs');
+const target = `chromium-${process.platform}`;
 let original: string;
 
 function vitest(): { status: number | null; output: string } {
@@ -43,10 +44,10 @@ describe('vitest adapter', () => {
     const report = await readReport({ outDir });
     assert.equal(report.summary.total, 1, r.output);
     assert.equal(report.results[0]!.status, 'added', r.output);
-    assert.equal(report.results[0]!.target, 'chromium');
+    assert.equal(report.results[0]!.target, target);
     assert.equal(report.results[0]!.name, 'card.browser.ts/card');
     await approve({ outDir });
-    assert.ok(existsSync(path.join(outDir, 'baseline/chromium/card.browser.ts_card.png')), r.output);
+    assert.ok(existsSync(path.join(outDir, `baseline/${target}/card.browser.ts_card.png`)), r.output);
   });
 
   it('unchanged UI passes and reports unchanged', async () => {
@@ -63,8 +64,8 @@ describe('vitest adapter', () => {
     const report = await readReport({ outDir });
     const res = report.results[0]!;
     assert.equal(res.status, 'changed', r.output);
-    assert.equal(res.current, 'current/chromium/card.browser.ts_card.png');
-    assert.equal(res.diff, 'diff/chromium/card.browser.ts_card.png');
+    assert.equal(res.current, `current/${target}/card.browser.ts_card.png`);
+    assert.equal(res.diff, `diff/${target}/card.browser.ts_card.png`);
     assert.ok(existsSync(path.join(outDir, res.current!)));
     assert.ok(existsSync(path.join(outDir, res.diff!)));
   });

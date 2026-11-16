@@ -6,6 +6,21 @@ export interface CompareOptions {
   threshold: number;
 }
 
+export interface MatchOptions extends CompareOptions {
+  /** Changed-pixel ratio still counted as a match. */
+  maxDiffPixelRatio: number;
+}
+
+/** A comparison passes when nothing differs, or a same-size image differs by at most `maxDiffPixelRatio`. */
+export function passes(cmp: Pick<CompareResult, 'diffPixels' | 'diffRatio' | 'sizeChanged'>, maxDiffPixelRatio: number): boolean {
+  return cmp.diffPixels === 0 || (!cmp.sizeChanged && cmp.diffRatio <= maxDiffPixelRatio);
+}
+
+/** Byte-identical PNGs match without decoding (the common case for an unchanged page). */
+export function imagesMatch(a: Buffer, b: Buffer, opts: MatchOptions): boolean {
+  return a.equals(b) || passes(compareImages(a, b, opts), opts.maxDiffPixelRatio);
+}
+
 export interface CompareResult {
   width: number;
   height: number;

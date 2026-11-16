@@ -11,9 +11,9 @@ export function renderHtml(report: Report): string {
 <title>pixelgate report</title>
 <style>
 :root { --bg:#fff; --fg:#1a1a1a; --muted:#666; --line:#e3e3e3; --card:#fafafa;
-  --changed:#c2410c; --added:#15803d; --removed:#6d28d9; --error:#b91c1c; --unchanged:#666; }
+  --changed:#c2410c; --added:#15803d; --updated:#0369a1; --removed:#6d28d9; --error:#b91c1c; --unchanged:#666; }
 @media (prefers-color-scheme: dark) { :root { --bg:#111; --fg:#eee; --muted:#999; --line:#2a2a2a; --card:#181818;
-  --changed:#fb923c; --added:#4ade80; --removed:#a78bfa; --error:#f87171; --unchanged:#999; } }
+  --changed:#fb923c; --added:#4ade80; --updated:#38bdf8; --removed:#a78bfa; --error:#f87171; --unchanged:#999; } }
 * { box-sizing: border-box; }
 body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
 header { position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); padding:12px 16px; z-index:1; }
@@ -49,7 +49,7 @@ input[type=range] { width:100%; }
 <script id="data" type="application/json">${data}</script>
 <script>
 const report = JSON.parse(document.getElementById('data').textContent);
-const STATUSES = ['changed', 'error', 'removed', 'added', 'unchanged'];
+const STATUSES = ['changed', 'error', 'removed', 'added', 'updated', 'unchanged'];
 const s = report.summary;
 let filter = s.changed + s.error + s.removed > 0 ? 'attention' : 'all';
 let view = 'side';
@@ -85,7 +85,7 @@ function slider(r) {
 }
 function card(r) {
   const meta = [r.target];
-  if (r.diffRatio != null && r.status === 'changed') meta.push((r.diffRatio * 100).toFixed(3) + '% px (' + r.diffPixels + ')');
+  if (r.diffRatio != null && (r.status === 'changed' || r.status === 'updated')) meta.push((r.diffRatio * 100).toFixed(3) + '% px (' + r.diffPixels + ')');
   if (r.sizeChanged) meta.push('size changed');
   const head = el('div', { class: 'head' }, [
     el('span', { class: 'tag', style: 'color:var(--' + r.status + ')', text: r.status }),

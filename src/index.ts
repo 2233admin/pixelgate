@@ -1,6 +1,7 @@
 export * from './config.js';
-export { compareImages, type CompareResult } from './compare.js';
-export { captureAll, STABILIZE_CSS, type CaptureResult } from './capture.js';
+export { compareImages, imagesMatch, passes, type CompareResult } from './compare.js';
+export { captureAll, stableShot, STABILIZE_CSS, type CaptureResult, type StableShot } from './capture.js';
+export { determineOutcome, applyOutcome, toResult, type Outcome } from './outcome.js';
 export { safeName, resolveUrl } from './names.js';
 export { storiesFromIndex, fetchStorybookPages } from './storybook.js';
 export { startVite, type RunningServer } from './vite.js';
