@@ -62,6 +62,7 @@ export {
   type ExploreState,
   type ExploreViolation,
 } from './explore.js';
+export { resolveEngine, engineTarget, type ResolveEngineOptions } from './engine.js';
 export { run, collectSnaps, matcherFor, type RunOptions } from './run.js';
 export {
   approve,

@@ -1,6 +1,6 @@
 {
   "name": "pixelgate-cli",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Self-hosted visual regression testing bot: Playwright capture, pixel diff, static review report, CI/agent gate.",
   "license": "MIT",
   "repository": {
@@ -38,6 +38,7 @@
   },
   "files": [
     "dist",
+    "engine-manifest.json",
     "README.md",
     "LICENSE"
   ],

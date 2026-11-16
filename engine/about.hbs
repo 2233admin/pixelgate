@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pixelgate engine: third-party licenses</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; background: #fff; }
+  pre { white-space: pre-wrap; background: #f6f6f6; padding: 1rem; border-radius: 6px; font-size: 12px; }
+  li { margin: 0.1rem 0; }
+</style>
+</head>
+<body>
+<h1>pixelgate engine: third-party licenses</h1>
+<p>The pixelgate engine binaries are built from <a href="https://github.com/antithesishq/bombadil">Bombadil</a>
+(MIT, Copyright (c) 2024 Antithesis; see THIRD_PARTY_NOTICES in the pixelgate repository) and the crates below.</p>
+<h2>Overview</h2>
+<ul>
+{{#each overview}}
+  <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+{{/each}}
+</ul>
+<h2>Licenses</h2>
+{{#each licenses}}
+<h3 id="{{id}}">{{name}}</h3>
+<p>Used by:</p>
+<ul>
+{{#each used_by}}
+  <li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+{{/each}}
+</ul>
+<pre>{{text}}</pre>
+{{/each}}
+</body>
+</html>

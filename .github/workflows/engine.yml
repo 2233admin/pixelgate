@@ -1,7 +1,8 @@
 name: engine
 
 # Builds the exploration engine (engine/bombadil, vendored Bombadil) for each platform
-# pixelgate supports. Binaries are uploaded as artifacts; publishing them is a later step.
+# pixelgate ships it for. On engine changes this checks the build; release.yml calls it to
+# build the binaries attached to the GitHub release (with `cache: false`).
 on:
   push:
     branches: [main]
@@ -13,13 +14,19 @@ on:
       - 'engine/**'
       - '.github/workflows/engine.yml'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      cache:
+        description: Restore and save the Rust build cache. Release builds pass false.
+        type: boolean
+        default: true
+      licenses:
+        description: Also generate the third-party licence notices for the binaries.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
-
-concurrency:
-  group: engine-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
@@ -30,8 +37,9 @@ jobs:
       matrix:
         include:
           - { os: windows-latest, target: x86_64-pc-windows-msvc, exe: .exe }
-          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, exe: '' }
-          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, exe: '' }
+          # 22.04 for an older glibc baseline (2.35): the binaries also run on older distros.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, exe: '' }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, exe: '' }
           - { os: macos-latest, target: aarch64-apple-darwin, exe: '' }
     defaults:
       run:
@@ -40,24 +48,81 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      # The toolchain version is pinned in engine/bombadil/rust-toolchain.toml.
+      - run: rustup toolchain install
 
-      - uses: Swatinem/rust-cache@v2
+      # A release build starts cold: a cache saved by another branch's run could carry a
+      # tampered target/, and `--locked` does not check cached build output.
+      # Off only when a caller passes cache: false. On push/PR/dispatch `inputs.cache` is unset,
+      # and `inputs.cache != false` would read unset as false (loose comparison) and skip the cache.
+      - if: toJSON(inputs.cache) != 'false'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: engine/bombadil
 
       # The terminal driver (PTY + libghostty-vt) is left out: pixelgate drives browsers only.
       - run: cargo build --release -p bombadil-cli --no-default-features --locked
 
+      - name: Name the binary
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/engine"
+          cp "target/release/bombadil${{ matrix.exe }}" \
+            "${RUNNER_TEMP}/engine/pixelgate-engine-${{ matrix.target }}${{ matrix.exe }}"
+
       - name: Smoke
         run: |
           set -euo pipefail
-          ./target/release/bombadil${{ matrix.exe }} --version
-          ./target/release/bombadil${{ matrix.exe }} browser test-external --help > /dev/null
+          bin="${RUNNER_TEMP}/engine/pixelgate-engine-${{ matrix.target }}${{ matrix.exe }}"
+          "$bin" --version
+          "$bin" browser test-external --help > /dev/null
+          case "${{ runner.os }}" in
+            macOS)
+              # The linker signs arm64 binaries ad hoc; macOS refuses to run them otherwise.
+              codesign -v "$bin"
+              ;;
+            Linux)
+              # TLS is rustls: a libssl dependency would break on hosts without that version.
+              ldd "$bin"
+              if ldd "$bin" | grep -Eq 'libssl|libcrypto'; then
+                echo "::error::unexpected OpenSSL dependency"
+                exit 1
+              fi
+              ;;
+          esac
 
       - uses: actions/upload-artifact@v7
         with:
           name: engine-${{ matrix.target }}
-          path: engine/bombadil/target/release/bombadil${{ matrix.exe }}
+          path: ${{ runner.temp }}/engine/
+          if-no-files-found: error
+          retention-days: 14
+
+  licenses:
+    # The notices of every crate compiled into the binaries, for the release.
+    if: inputs.licenses == true
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
+        working-directory: engine/bombadil
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: rustup toolchain install
+
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-about
+
+      - run: |
+          cargo about generate --locked --no-default-features \
+            -c ../about.toml ../about.hbs -o "${RUNNER_TEMP}/THIRD_PARTY_LICENSES.html" \
+            --manifest-path lib/bombadil-cli/Cargo.toml
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: engine-licenses
+          path: ${{ runner.temp }}/THIRD_PARTY_LICENSES.html
           if-no-files-found: error
           retention-days: 14

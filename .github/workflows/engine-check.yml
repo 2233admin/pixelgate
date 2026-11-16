@@ -1,0 +1,48 @@
+name: engine-check
+
+# After a release: install the published package on each platform and let it download and
+# verify the engine from the GitHub release (the end-to-end path users take). Run by hand
+# once the release is published and the npm version approved (README, "Releasing").
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published pixelgate-cli version, e.g. 0.2.0
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, ubuntu-22.04-arm, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          package-manager-cache: false
+
+      - name: Install and fetch the engine
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          case "$VERSION" in
+            *[!0-9.]*|'') echo "::error::not a version: $VERSION"; exit 1 ;;
+          esac
+          dir="${RUNNER_TEMP}/consumer"
+          mkdir -p "$dir" && cd "$dir"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund "pixelgate-cli@${VERSION}" playwright
+          npx --no pixelgate --version
+          npx --no pixelgate engine install
+          engine="$(npx --no pixelgate engine path)"
+          "$engine" --version
