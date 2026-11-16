@@ -1,5 +1,6 @@
 use std::ffi::{CString, c_char, c_int};
 
+#[cfg(not(windows))]
 #[link(name = "libvoidstar_shim", kind = "static")]
 unsafe extern "C" {
     fn antithesis_load_libvoidstar();
@@ -11,6 +12,7 @@ unsafe extern "C" {
     fn antithesis_fuzz_getchar() -> c_int;
 }
 
+#[cfg(not(windows))]
 #[used]
 // https://refspecs.linuxbase.org/LSB_3.0.0/LSB-PDA/LSB-PDA/specialsections.html
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".init_array"))]
@@ -46,4 +48,16 @@ pub fn mark_state_boundary() {
     // from where it may fork off and try other entropy
     // input.
     let _ = unsafe { antithesis_fuzz_getchar() };
+}
+
+// Windows: Antithesis' libvoidstar does not exist there; coverage and fuzz entropy are no-ops.
+#[cfg(windows)]
+unsafe fn antithesis_init_coverage_module(_edge_count: usize, _symbol_file_name: *const c_char) -> usize {
+    0
+}
+#[cfg(windows)]
+unsafe fn antithesis_notify_coverage(_edge_index: usize) {}
+#[cfg(windows)]
+unsafe fn antithesis_fuzz_getchar() -> c_int {
+    0
 }

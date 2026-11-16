@@ -3,6 +3,14 @@ use std::path::Path;
 use std::process::Stdio;
 
 fn main() {
+    // Windows gives the main thread 1 MB of stack (Linux: 8 MB); the engine
+    // overflows it, so ask the MSVC linker for 16 MB.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        println!("cargo:rustc-link-arg-bins=/STACK:16777216");
+    }
+
     let dist_directory = Path::new("../../target/inspect");
 
     println!("cargo:rerun-if-changed=../bombadil-inspect/src");
@@ -50,7 +58,16 @@ fn build_inspect(dist_directory: &Path) {
         command.arg("--release");
     }
 
-    let status = command.status().expect("trunk command failed");
+    let status = match command.status() {
+        Ok(status) => status,
+        // No trunk (e.g. a Windows dev box): ship the placeholder page.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            println!("cargo:warning=trunk not found, inspect UI is a placeholder");
+            ensure_placeholder(dist_directory);
+            return;
+        }
+        Err(error) => panic!("trunk command failed: {error}"),
+    };
 
     if !status.success() {
         panic!("cargo:warning=trunk build failed");

@@ -4,6 +4,7 @@ use std::io::ErrorKind;
 use std::marker::PhantomData;
 use std::net::TcpStream;
 use std::ops::Range;
+#[cfg(unix)]
 use std::os::fd::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,53 @@ use std::time::{Duration, Instant};
 
 use cdp_protocol::cdp::browser_protocol::target::SessionId;
 use crossbeam_channel as mpmc;
+#[cfg(unix)]
 use mio::unix::SourceFd;
+
+/// What mio polls for the websocket. Unix: the socket's fd. Windows: a mio
+/// TcpStream over a clone of the socket (mio has no raw-socket source there).
+#[cfg(unix)]
+type PollSource = RawFd;
+#[cfg(windows)]
+type PollSource = mio::net::TcpStream;
+
+#[cfg(unix)]
+fn poll_source(stream: &TcpStream) -> std::io::Result<PollSource> {
+    Ok(stream.as_raw_fd())
+}
+#[cfg(windows)]
+fn poll_source(stream: &TcpStream) -> std::io::Result<PollSource> {
+    Ok(mio::net::TcpStream::from_std(stream.try_clone()?))
+}
+
+#[cfg(unix)]
+fn register_source(
+    poll: &Poll,
+    source: &mut PollSource,
+    interest: Interest,
+    first: bool,
+) -> std::io::Result<()> {
+    if first {
+        poll.registry()
+            .register(&mut SourceFd(source), WEBSOCKET, interest)
+    } else {
+        poll.registry()
+            .reregister(&mut SourceFd(source), WEBSOCKET, interest)
+    }
+}
+#[cfg(windows)]
+fn register_source(
+    poll: &Poll,
+    source: &mut PollSource,
+    interest: Interest,
+    first: bool,
+) -> std::io::Result<()> {
+    if first {
+        poll.registry().register(source, WEBSOCKET, interest)
+    } else {
+        poll.registry().reregister(source, WEBSOCKET, interest)
+    }
+}
 use mio::{Events as MioEvents, Interest, Poll, Token, Waker};
 use tungstenite::client::{IntoClientRequest, connect_with_config};
 use tungstenite::protocol::WebSocketConfig;
@@ -192,24 +239,20 @@ impl ConnectionInner {
             .max_message_size(None)
             .max_frame_size(None);
         let (mut ws, _resp) = connect_with_config(url, Some(config), 3)?;
-        let fd_raw = {
+        let mut source = {
             let stream = ws.get_mut();
             match stream {
                 MaybeTlsStream::Plain(stream) => {
                     stream.set_nodelay(true)?;
                     stream.set_nonblocking(true)?;
-                    stream.as_raw_fd()
+                    poll_source(stream)?
                 }
                 _ => bail!("unsupported stream type"),
             }
         };
 
         let poll = Poll::new()?;
-        poll.registry().register(
-            &mut SourceFd(&fd_raw),
-            WEBSOCKET,
-            Interest::READABLE,
-        )?;
+        register_source(&poll, &mut source, Interest::READABLE, true)?;
         let commands_waker = Arc::new(Waker::new(poll.registry(), COMMANDS)?);
 
         let (worker_tx, worker_rx) = mpmc::bounded(16);
@@ -219,7 +262,7 @@ impl ConnectionInner {
             let subscribers = subscribers.clone();
             thread::spawn(move || {
                 supervise_worker(&subscribers, || {
-                    websocket_worker(ws, poll, worker_rx, subscribers.clone())
+                    websocket_worker(ws, poll, source, worker_rx, subscribers.clone())
                 });
             })
         };
@@ -476,11 +519,14 @@ fn flush_nonblocking(
 
 fn set_write_interest(
     poll: &Poll,
-    fd_raw: RawFd,
+    source: &mut PollSource,
     registered: &mut bool,
     write_pending: bool,
 ) -> Result<()> {
-    if *registered == write_pending {
+    // Windows: mio re-arms a socket only after an I/O call on its own type
+    // returns WouldBlock, and tungstenite reads through the std stream, so
+    // re-register before every poll to re-arm readiness.
+    if !cfg!(windows) && *registered == write_pending {
         return Ok(());
     }
 
@@ -489,8 +535,7 @@ fn set_write_interest(
     } else {
         Interest::READABLE
     };
-    poll.registry()
-        .reregister(&mut SourceFd(&fd_raw), WEBSOCKET, interest)?;
+    register_source(poll, source, interest, false)?;
     *registered = write_pending;
     Ok(())
 }
@@ -644,6 +689,7 @@ fn handle_message(
 fn websocket_worker(
     mut ws: WebSocket<MaybeTlsStream<TcpStream>>,
     mut poll: Poll,
+    mut source: PollSource,
     requests_rx: mpmc::Receiver<WorkerRequest>,
     subscribers: Arc<Mutex<Subscribers>>,
 ) -> Result<()> {
@@ -653,10 +699,6 @@ fn websocket_worker(
     // other reason not receiving responses
     let mut calls_in_flight: CallsInFlight = HashMap::new();
     let mut mio_events = MioEvents::with_capacity(16);
-    let fd_raw = match ws.get_ref() {
-        MaybeTlsStream::Plain(stream) => stream.as_raw_fd(),
-        _ => bail!("unsupported stream type"),
-    };
     let mut write_interest_registered = false;
 
     loop {
@@ -669,7 +711,7 @@ fn websocket_worker(
         let mut write_pending = flush_nonblocking(&mut ws)?;
         set_write_interest(
             &poll,
-            fd_raw,
+            &mut source,
             &mut write_interest_registered,
             write_pending,
         )?;
@@ -715,7 +757,7 @@ fn websocket_worker(
 
             set_write_interest(
                 &poll,
-                fd_raw,
+                &mut source,
                 &mut write_interest_registered,
                 write_pending,
             )?;
