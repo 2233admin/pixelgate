@@ -1,0 +1,15 @@
+[package]
+name = "bombadil-schema"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bitflags.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+small-string = { path = "../small-string" }
+stdx = { path = "../stdx" }
+
+[dev-dependencies]
+insta.workspace = true
+hegeltest.workspace = true

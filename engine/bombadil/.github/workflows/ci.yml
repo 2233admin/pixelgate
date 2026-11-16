@@ -1,0 +1,593 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  id-token: write
+  contents: write
+  pages: write
+  actions: write
+
+jobs:
+  check-version:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.changelog.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          cargo_version=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$cargo_version" != "$tag_version" ]; then
+            echo "::error::Tag version ($tag_version) does not match Cargo.toml version ($cargo_version)"
+            exit 1
+          fi
+          echo "Version $cargo_version confirmed"
+      - name: Extract changelog
+        id: changelog
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          notes=$(awk "/^## ${version//./\\.}/{found=1; next} /^## /{found=0} found" CHANGELOG.md)
+          if [ -z "$notes" ]; then
+            echo "::error::No changelog entry found for version $version"
+            exit 1
+          fi
+          {
+            echo "notes<<EOF"
+            echo "$notes"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  build-x86_64-linux:
+    name: Build (x86_64-linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          scope: build-x86_64-linux
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Build package
+        run: nix build .#default
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: bombadil-x86_64-linux
+          path: result/bin/bombadil
+
+  build-aarch64-linux:
+    name: Build (aarch64-linux)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          scope: build-aarch64-linux
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Build package
+        run: nix build .#default
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: bombadil-aarch64-linux
+          path: result/bin/bombadil
+
+  build-aarch64-darwin:
+    name: Build (aarch64-darwin)
+    runs-on: macos-15-xlarge
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          scope: build-aarch64-darwin
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Build package
+        run: nix build .#default
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: bombadil-aarch64-darwin
+          path: result/bin/bombadil
+
+  build-docker:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          scope: docker
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - run: nix build .#docker -o bombadil-docker-image.tar.gz
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bombadil-docker-image
+          path: bombadil-docker-image.tar.gz
+
+  check-fmt:
+    name: Check (fmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          scope: check-fmt
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - run: nix build .#checks.x86_64-linux.fmt
+
+  check-clippy:
+    name: Check (clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          scope: check-clippy
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - run: nix build .#checks.x86_64-linux.clippy
+
+  check-tests-unit:
+    name: Check (tests, unit, ${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            system: x86_64-linux
+          - os: macos-15-xlarge
+            system: aarch64-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          scope: check-tests-unit-${{ matrix.system }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - run: nix build -L .#checks.${{ matrix.system }}.tests-unit
+
+  check-tests-browser:
+    name: Check (tests, browser, ${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            system: x86_64-linux
+          - os: macos-15-xlarge
+            system: aarch64-darwin
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          scope: check-tests-browser-${{ matrix.system }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - run: nix build -L .#checks.${{ matrix.system }}.tests-browser
+
+  build-npm-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          scope: npm-package
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Build npm package
+        run: nix build .#npm-package
+      - name: Copy package
+        run: |
+          mkdir -p npm-pkg-dist
+          cp -r result/* npm-pkg-dist/
+      - name: Create package tarball
+        run: tar -czf bombadil-npm-package.tar.gz -C npm-pkg-dist .
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bombadil-npm-package
+          path: bombadil-npm-package.tar.gz
+
+  build-manual:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          scope: manual
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Build manual
+        run: nix build .#manual
+      - name: Create manual archive
+        run: tar -czf bombadil-manual.tar.gz -C result .
+      - name: Upload manual artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bombadil-manual
+          path: bombadil-manual.tar.gz
+      - name: Upload manual for GitHub Pages
+        uses: actions/upload-artifact@v4
+        with:
+          name: manual-pages
+          path: result/
+
+  inspect-test:
+    name: Inspect UI test (${{ matrix.mode }})
+    needs: build-x86_64-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [managed, external-create-target, external-attach]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: browser-actions/setup-chrome@v1
+        id: setup-chrome
+        with:
+          chrome-version: stable
+      - run: echo "CHROME=${{ steps.setup-chrome.outputs.chrome-path }}" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: bombadil-x86_64-linux
+      - name: Generate report
+        run: |
+          chmod +x bombadil
+          ./bombadil browser test lib/bombadil-browser-integration-tests/tests/console-error/index.html \
+            --headless --no-sandbox \
+            --output-path report \
+            --exit-on-violation \
+            --time-limit 30s || true
+      - name: Test inspect UI
+        env:
+          MODE: ${{ matrix.mode }}
+          TIME_LIMIT: ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) && '1m' || '20s' }}
+        run: |
+          trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
+
+          ./bombadil browser inspect report --no-open --port 1073 &
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:1073 > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+
+          common_args=(
+            --instrument-javascript=""
+            --output-path inspect-test-output
+            --time-limit "$TIME_LIMIT"
+            http://localhost:1073
+            lib/bombadil-inspect/test/inspect.spec.ts
+          )
+
+          case "$MODE" in
+            managed)
+              ./bombadil browser test --headless --no-sandbox "${common_args[@]}"
+              ;;
+            external-create-target|external-attach)
+              initial_url=about:blank
+              external_args=(--remote-debugger http://localhost:9222)
+              if [ "$MODE" = "external-create-target" ]; then
+                external_args+=(--create-target)
+              else
+                initial_url=http://localhost:1073
+              fi
+              "$CHROME" \
+                --headless=new \
+                --no-sandbox \
+                --disable-gpu \
+                --remote-debugging-port=9222 \
+                --user-data-dir="$(mktemp -d)" \
+                "$initial_url" &
+              for i in $(seq 1 30); do
+                if curl -sf http://localhost:9222/json/version > /dev/null 2>&1; then break; fi
+                sleep 1
+              done
+              ./bombadil browser test-external "${external_args[@]}" "${common_args[@]}"
+              ;;
+          esac
+      - name: Upload inspect test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inspect-test-output-${{ matrix.mode }}
+          path: inspect-test-output/
+
+  smoke-test:
+    name: Smoke test (${{ matrix.os }})
+    needs: [build-x86_64-linux, build-aarch64-darwin]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: bombadil-x86_64-linux
+          - os: macos-15
+            artifact: bombadil-aarch64-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+      - name: Test binary runs
+        run: |
+          chmod +x bombadil
+          ./bombadil --version
+      - name: Test terminal subcommand
+        run: |
+          ./bombadil terminal test \
+            --specification examples/cat.ts \
+            --output-path terminal-test-output \
+            head -n 100
+          test -s terminal-test-output
+          # Read the whole trace, which warns if it wasn't finished. (A
+          # negated command doesn't fail the step under `bash -e`.)
+          ./bombadil trace terminal-test-output \
+            > trace-check.out 2> trace-check.err \
+            || { cat trace-check.err; exit 1; }
+          cat trace-check.err
+          if grep -q 'not finished' trace-check.err; then exit 1; fi
+          # The screen of the last state, one line per state starting `#`.
+          states=$(grep -c '^#' trace-check.out || true)
+          if [ "$states" -eq 0 ]; then
+            echo "the trace holds no states" >&2
+            exit 1
+          fi
+          ./bombadil trace terminal-test-output --state "$((states - 1))" --screen
+      - name: Upload terminal test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-test-output-${{ matrix.os }}
+          path: terminal-test-output
+
+  smoke-test-docker:
+    name: Smoke test (docker)
+    needs: build-docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bombadil-docker-image
+      - name: Load Docker image
+        run: |
+          LOAD_OUTPUT=$(docker load -i bombadil-docker-image.tar.gz)
+          echo "$LOAD_OUTPUT"
+          IMAGE_TAG=$(echo "$LOAD_OUTPUT" | sed -n 's/^Loaded image: //p')
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+      - name: Run browser test in container
+        run: |
+          mkdir -p docker-smoke-output
+          chmod 777 docker-smoke-output
+          set +e
+          docker run --rm \
+            -v "$PWD/lib/bombadil-browser-integration-tests/tests/console-error:/test:ro" \
+            -v "$PWD/docker-smoke-output:/output" \
+            "$IMAGE_TAG" \
+            browser test /test/index.html \
+              --headless --no-sandbox \
+              --output-path /output/trace.bin \
+              --time-limit 10s
+          exit_code=$?
+          set -e
+          if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 2 ]; then
+            echo "::error::bombadil exited with unexpected code $exit_code (expected 0 or 2)"
+            exit "$exit_code"
+          fi
+          test -s docker-smoke-output/trace.bin
+      - name: Read browser trace
+        run: |
+          docker run --rm \
+            -v "$PWD/docker-smoke-output:/output:ro" \
+            "$IMAGE_TAG" \
+            trace /output/trace.bin
+      - name: Upload docker smoke test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-smoke-output
+          path: docker-smoke-output/
+
+  test-npm-package:
+    name: Test npm package (${{ matrix.os }})
+    needs: [build-x86_64-linux, build-aarch64-darwin, build-npm-package]
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: bombadil-x86_64-linux
+            binary: bombadil-linux-x64
+          - os: macos-15
+            artifact: bombadil-aarch64-darwin
+            binary: bombadil-darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bombadil-npm-package
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Test npm package end to end
+        run: |
+          mkdir -p pkg
+          tar -xzf bombadil-npm-package.tar.gz -C pkg
+          mkdir -p pkg/binaries
+          cp bombadil pkg/binaries/${{ matrix.binary }}
+          chmod +x pkg/binaries/${{ matrix.binary }}
+          mkdir test-install
+          cd test-install
+          npm install ../pkg
+          npx bombadil --version
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      [
+        check-version,
+        check-fmt,
+        check-clippy,
+        check-tests-unit,
+        check-tests-browser,
+        build-x86_64-linux,
+        build-aarch64-linux,
+        build-aarch64-darwin,
+        build-npm-package,
+        build-docker,
+        build-manual,
+        smoke-test,
+        smoke-test-docker,
+        test-npm-package,
+      ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Prepare release binaries
+        run: |
+          for target in x86_64-linux aarch64-linux aarch64-darwin; do
+            chmod +x artifacts/bombadil-$target/bombadil
+            mv artifacts/bombadil-$target/bombadil artifacts/bombadil-$target/bombadil-$target
+          done
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          body: ${{ needs.check-version.outputs.changelog }}
+          files: |
+            artifacts/bombadil-x86_64-linux/bombadil-x86_64-linux
+            artifacts/bombadil-aarch64-linux/bombadil-aarch64-linux
+            artifacts/bombadil-aarch64-darwin/bombadil-aarch64-darwin
+            artifacts/bombadil-npm-package/bombadil-npm-package.tar.gz
+            artifacts/bombadil-docker-image/bombadil-docker-image.tar.gz
+            artifacts/bombadil-aarch64-darwin/bombadil-aarch64-darwin
+            artifacts/bombadil-manual/bombadil-manual.tar.gz
+
+  publish-npm:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      [
+        check-version,
+        build-x86_64-linux,
+        build-aarch64-linux,
+        build-aarch64-darwin,
+        build-npm-package,
+        release,
+      ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Extract npm package
+        run: |
+          mkdir -p pkg
+          tar -xzf artifacts/bombadil-npm-package/bombadil-npm-package.tar.gz -C pkg
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Bundle binaries
+        run: |
+          mkdir -p pkg/binaries
+          cp artifacts/bombadil-x86_64-linux/bombadil  pkg/binaries/bombadil-linux-x64
+          cp artifacts/bombadil-aarch64-linux/bombadil pkg/binaries/bombadil-linux-arm64
+          cp artifacts/bombadil-aarch64-darwin/bombadil pkg/binaries/bombadil-darwin-arm64
+          chmod +x pkg/binaries/*
+      - name: Publish to npm
+        run: |
+          cd pkg
+          npm publish --provenance --access public
+
+  publish-docker:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-docker, smoke-test-docker]
+    runs-on: ubuntu-latest
+    steps:
+      - name: OIDC token
+        id: docker_oidc
+        uses: docker/oidc-action@v1
+        with:
+          connection-id: "149b2b02-59d1-42e7-98f3-2cc6961226bb"
+      - name: Docker login
+        uses: docker/login-action@v3
+        with:
+          username: antithesishq
+          password: ${{ steps.docker_oidc.outputs.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: bombadil-docker-image
+          path: bombadil-docker-image
+      - name: Load Docker image and extract tag
+        run: |
+          LOAD_OUTPUT=$(docker load -i bombadil-docker-image/bombadil-docker-image.tar.gz)
+          echo "$LOAD_OUTPUT"
+          IMAGE_TAG=$(echo "$LOAD_OUTPUT" | sed -n 's/^Loaded image: //p')
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+      - name: Push image
+        run: docker push "$IMAGE_TAG"
+
+  publish-manual:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-manual, release]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download manual pages
+        uses: actions/download-artifact@v4
+        with:
+          name: manual-pages
+          path: manual
+      - name: Add llms-full.txt
+        run: |
+          cat > manual/llms-full.txt <<'EOF'
+          # The Bombadil Manual
+
+          Bombadil has two drivers. Fetch the plain-text manual for the one you need:
+
+          - Browser driver: browser/bombadil-manual.txt
+          - Terminal driver: terminal/bombadil-manual.txt
+          EOF
+      - name: Upload to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: manual
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  all-checks-passed:
+    if: always()
+    needs:
+      - build-x86_64-linux
+      - build-aarch64-linux
+      - build-aarch64-darwin
+      - build-docker
+      - check-fmt
+      - check-clippy
+      - check-tests-unit
+      - check-tests-browser
+      - build-npm-package
+      - build-manual
+      - inspect-test
+      - smoke-test
+      - smoke-test-docker
+      - test-npm-package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all jobs passed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
