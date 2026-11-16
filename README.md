@@ -378,10 +378,12 @@ export default defineConfig({
   <a href="#" data-pixelgate-focus-visible>Docs</a>
   ```
 
-  pixelgate copies every CSS rule that uses `:hover`, `:focus`,
-  `:focus-visible` or `:active` into one keyed on the attribute (inside
-  `@media`, `@supports`, `@layer`, nesting, `@import` and open shadow roots
-  too), so it works in every browser. Stylesheets from another origin cannot
+  pixelgate rewrites every CSS rule that uses `:hover`, `:focus`,
+  `:focus-visible` or `:active`: `:hover` becomes
+  `:is(:hover, [data-pixelgate-hover])`, with the same specificity, so
+  `:not(:hover)` rules and nested rules follow too (inside `@media`,
+  `@supports`, `@layer`, nesting, `@import` and open shadow roots as well).
+  It works in every browser. Stylesheets from another origin cannot
   be read; they are listed in the result (`unreadableStylesheets`). The
   browser's own default focus ring is not a CSS rule: for that, focus the
   element in `beforeCapture`.

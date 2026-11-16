@@ -96,7 +96,8 @@ beforeAll(async () => {
 <div id="card" style="margin:40px;width:100px;height:40px;background:#eee;box-shadow:0 4px 12px 2px rgba(0,0,0,.5)"></div></body>`,
       '/pseudo': () => `<!doctype html><html><head><link rel="stylesheet" href="http://localhost:${port}/ext.css"><style>
 @media (min-width: 1px) { button:hover { background: rgb(255, 0, 0); } }
-button { background: rgb(0, 0, 255); border: 0; width: 60px; height: 30px; margin: 0; display: block; }
+button:not(:hover) { background: rgb(0, 0, 255); }
+button { border: 0; width: 60px; height: 30px; margin: 0; display: block; }
 </style></head><body style="margin:0;padding-top:50px"><button data-pixelgate-hover>a</button><button>b</button></body></html>`,
       '/a11y': () => `<!doctype html><html lang="en"><body style="margin:0">
 <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="40" height="40"><div id="ok"><button>Ok</button></div></body></html>`,
@@ -539,7 +540,7 @@ describe('in-page helpers (chromium)', () => {
     }
   });
 
-  it('forcePseudoClasses: copies right after the original, in groups and nesting; leaves :focus-within alone', async () => {
+  it('forcePseudoClasses: rewrites in place, in groups, negations and nesting; leaves :focus-within alone', async () => {
     const browser = await chromium.launch();
     try {
       const page = await browser.newPage();
@@ -548,7 +549,10 @@ a:hover, b:focus { color: red; }
 @supports (display: grid) { @media (min-width: 1px) { c:focus-visible { color: red; } } }
 d:focus-within { color: red; }
 e { &:active { color: red; } }
-</style>`);
+f:not(:hover) { color: blue; }
+.card:hover { button:focus { color: green; } }
+</style>
+<div class="card" data-pixelgate-hover><button data-pixelgate-focus>x</button></div><f data-pixelgate-hover>y</f>`);
       assert.deepEqual(await page.evaluate(forcePseudoClasses), []);
       const selectors = await page.evaluate(() => {
         const out: string[] = [];
@@ -563,15 +567,18 @@ e { &:active { color: red; } }
         return out;
       });
       assert.deepEqual(selectors, [
-        'a:hover, b:focus',
-        'a[data-pixelgate-hover], b[data-pixelgate-focus]',
-        'c:focus-visible',
-        'c[data-pixelgate-focus-visible]',
+        'a:is(:hover, [data-pixelgate-hover]), b:is(:focus, [data-pixelgate-focus])',
+        'c:is(:focus-visible, [data-pixelgate-focus-visible])',
         'd:focus-within',
         'e',
-        '&:active',
-        '&[data-pixelgate-active]',
+        '&:is(:active, [data-pixelgate-active])',
+        'f:not(:is(:hover, [data-pixelgate-hover]))',
+        '.card:is(:hover, [data-pixelgate-hover])',
+        '& button:is(:focus, [data-pixelgate-focus])',
       ]);
+      // Both forced states hold at once under nesting; the negation no longer matches.
+      assert.equal(await page.locator('button').evaluate((e) => getComputedStyle(e).color), 'rgb(0, 128, 0)');
+      assert.notEqual(await page.locator('f').evaluate((e) => getComputedStyle(e).color), 'rgb(0, 0, 255)');
     } finally {
       await browser.close();
     }

@@ -234,7 +234,7 @@ export interface Config {
   /**
    * Force `:hover`, `:focus`, `:focus-visible` and `:active` styles on elements marked
    * `data-pixelgate-hover` (`-focus`, `-focus-visible`, `-active`), so several elements can
-   * show those states in one screenshot. Works by copying the page's CSS rules; rules in
+   * show those states in one screenshot. Works by rewriting the page's CSS rules; rules in
    * stylesheets the page cannot read (other origins) are reported, not forced. Default false.
    */
   applyPseudoClasses?: boolean;

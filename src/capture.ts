@@ -168,11 +168,12 @@ export function isAllowed(url: string, allow: string[]): boolean {
 export const PSEUDO_CLASSES = ['hover', 'focus', 'focus-visible', 'active'] as const;
 
 /**
- * Runs in the page (self-contained). Inserts, right after every readable CSS rule whose
- * selector uses `:hover`, `:focus`, `:focus-visible` or `:active`, a copy keyed on the
- * `data-pixelgate-*` attribute instead, so marked elements show that state. Walks
- * `@media`/`@supports`/`@layer`/nesting, `@import`, adopted sheets and open shadow roots.
- * Returns the stylesheets it could not read.
+ * Runs in the page (self-contained). Rewrites every readable CSS rule whose selector uses
+ * `:hover`, `:focus`, `:focus-visible` or `:active` in place: `:hover` becomes
+ * `:is(:hover, [data-pixelgate-hover])`, same specificity, same position. So marked
+ * elements show that state, `:not(:hover)` stops matching them, and nested rules under a
+ * forced parent follow. Walks `@media`/`@supports`/`@layer`/nesting, `@import`, adopted
+ * sheets and open shadow roots. Returns the stylesheets it could not read.
  */
 export function forcePseudoClasses(): string[] {
   const has = /:(hover|focus-visible|focus|active)(?![\w-])/;
@@ -190,13 +191,15 @@ export function forcePseudoClasses(): string[] {
       }
       if (rule instanceof CSSStyleRule && has.test(rule.selectorText)) {
         const from = rule.selectorText;
-        const to = from.replace(all, (_m, p: string) => `[data-pixelgate-${p}]`);
-        const text = rule.cssText.startsWith(from) ? to + rule.cssText.slice(from.length) : `${to} { ${rule.style.cssText} }`;
-        try {
-          parent.insertRule(text, i + 1);
-          i++;
-        } catch {
-          // A selector this context will not take: that state stays unforced.
+        rule.selectorText = from.replace(all, (m, p: string) => `:is(${m}, [data-pixelgate-${p}])`);
+        // A browser without `:is()` keeps the old selector: then add a copy keyed on the attribute.
+        if (rule.selectorText === from) {
+          try {
+            parent.insertRule(`${from.replace(all, (_m, p: string) => `[data-pixelgate-${p}]`)} { ${rule.style.cssText} }`, i + 1);
+            i++;
+          } catch {
+            // A selector this context will not take: that state stays unforced.
+          }
         }
       }
       const inner = rule as unknown as Partial<Parent>;

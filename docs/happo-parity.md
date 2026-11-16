@@ -38,7 +38,7 @@ Status: HAVE / PARTIAL / GAP / N/A (SaaS-only, out of scope for a self-hosted to
 
 | Happo | | pixelgate | Status |
 | --- | --- | --- | --- |
-| `applyPseudoClasses` | `data-happo-hover/focus/focus-visible/active` attributes force `:hover` etc. | `applyPseudoClasses` + `data-pixelgate-hover/focus/focus-visible/active`: copies of the readable CSS rules (all engines, also `@media`/`@layer`/nesting/shadow roots); unreadable cross-origin sheets reported | HAVE |
+| `applyPseudoClasses` | `data-happo-hover/focus/focus-visible/active` attributes force `:hover` etc. | `applyPseudoClasses` + `data-pixelgate-hover/focus/focus-visible/active`: readable CSS rules rewritten in place, `:hover` to `:is(:hover, [data-pixelgate-hover])` (all engines; negations, nesting, `@media`/`@layer`, shadow roots); unreadable cross-origin sheets reported | HAVE |
 | `includeOutlinesAndShadows` | grow element crops to include focus rings / box-shadows | `includeOutlinesAndShadows` (global, Storybook source, page): outlines and outer box-shadows of the element and its descendants | HAVE (no `filter: drop-shadow`) |
 | `maxHeight` / `maxWidth` | cap tall full-page shots (default 5000px) | `maxHeight` (default 5000) / `maxWidth` (global, target, page), also element crops; full size reported as `capped` | HAVE |
 | animated snapshots | capture animations as frame sequences (CSS, WAAPI, SMIL, rAF, video) | none | GAP (large) |
