@@ -4,7 +4,7 @@
  * `pixelgate.screenshot()` runs pixelgate's own capture on the test's page: the stability
  * loop, hide/mask, the configured comparator and format, checks and ARIA snapshots. The
  * files go into the usual `.pixelgate/` layout; each result travels to the pixelgate
- * reporter (`pixelgate/playwright-reporter`) as a test attachment, and the reporter writes
+ * reporter (`pixelgate-cli/playwright-reporter`) as a test attachment, and the reporter writes
  * the review page and fails the run per `failOn`, so `pixelgate approve` works unchanged.
  */
 import { existsSync } from 'node:fs';
@@ -69,7 +69,7 @@ export const test = base.extend<{ pixelgateOptions: PixelgateOptions; pixelgate:
   pixelgate: async ({ page, browserName, pixelgateOptions }, use, info) => {
     if (!usesReporter(info)) {
       throw new Error(
-        "pixelgate: add the pixelgate reporter to playwright.config, e.g. reporter: [['list'], ['pixelgate/playwright-reporter']]; " +
+        "pixelgate: add the pixelgate reporter to playwright.config, e.g. reporter: [['list'], ['pixelgate-cli/playwright-reporter']]; " +
           'without it no report is written and nothing fails the run.',
       );
     }

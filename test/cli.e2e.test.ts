@@ -52,7 +52,7 @@ console.log(c.pages.map((p) => p.name).join());`;
 
   it('an ES module pixelgate.config.ts or .js loads in a "type": "commonjs" package', async () => {
     const ts = await load('commonjs', {
-      'pixelgate.config.ts': `import type { Config } from 'pixelgate';\nconst config: Config = ${page('ts')};\nexport default config;\n`,
+      'pixelgate.config.ts': `import type { Config } from 'pixelgate-cli';\nconst config: Config = ${page('ts')};\nexport default config;\n`,
     });
     assert.equal(ts.status, 0, ts.stderr);
     assert.equal(ts.stdout, 'ts');
@@ -82,7 +82,7 @@ console.log(c.pages.map((p) => p.name).join());`;
 
   it('CommonJS files stay CommonJS: type-only imports, module syntax in comments and strings', async () => {
     const ts = await load('commonjs', {
-      'pixelgate.config.ts': `import type { Config } from 'pixelgate';\nconst config: Config = ${page('typed')};\nmodule.exports = config;\n`,
+      'pixelgate.config.ts': `import type { Config } from 'pixelgate-cli';\nconst config: Config = ${page('typed')};\nmodule.exports = config;\n`,
     });
     assert.equal(ts.status, 0, ts.stderr);
     assert.equal(ts.stdout, 'typed');

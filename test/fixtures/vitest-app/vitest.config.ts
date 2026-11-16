@@ -1,5 +1,5 @@
 import { playwright } from '@vitest/browser-playwright';
-import { PixelgateReporter, pixelgateScreenshots } from 'pixelgate/vitest';
+import { PixelgateReporter, pixelgateScreenshots } from 'pixelgate-cli/vitest';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({

@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, it } from 'vitest';
 import { approve, readReport } from '../src/report.js';
 
 // Runs a real Vitest browser-mode project (test/fixtures/vitest-app) that uses
-// `pixelgate/vitest` from the built dist, as a consumer would.
+// `pixelgate-cli/vitest` from the built dist, as a consumer would.
 const app = fileURLToPath(new URL('./fixtures/vitest-app/', import.meta.url));
 const outDir = path.join(app, '.pixelgate');
 const theme = path.join(app, 'theme.json');

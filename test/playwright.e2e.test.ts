@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, it } from 'vitest';
 import { approve, readReport } from '../src/report.js';
 
 // Runs a real Playwright Test project (test/fixtures/playwright-app) that uses
-// `pixelgate/playwright` and its reporter from the built dist, as a consumer would.
+// `pixelgate-cli/playwright` and its reporter from the built dist, as a consumer would.
 const repo = fileURLToPath(new URL('..', import.meta.url));
 const app = path.join(repo, 'test', 'fixtures', 'playwright-app');
 const outDir = path.join(app, '.pixelgate');
