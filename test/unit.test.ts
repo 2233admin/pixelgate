@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { encode as encodePng } from 'fast-png';
 import { describe, it } from 'vitest';
@@ -18,7 +21,7 @@ import { devices } from 'playwright';
 import { isCI, parseViewport, resolveChecks, resolveConfig } from '../src/config.js';
 import { resolveUrl, safeName } from '../src/names.js';
 import { determineOutcome, type OutcomeInput } from '../src/outcome.js';
-import { buildReport, summarize, type Report, type SnapshotResult } from '../src/report.js';
+import { approve, buildReport, readReport, summarize, writeReport, type Report, type SnapshotResult } from '../src/report.js';
 import { commentMarker, renderMarkdown } from '../src/markdown.js';
 import { storiesFromIndex } from '../src/storybook.js';
 import { esmEntry } from '../src/vite.js';
@@ -634,5 +637,43 @@ describe('ARIA snapshots: normalise, outcome, patch, status, markdown', () => {
     assert.match(md, /^````diff$/m);
     assert.match(md, /alt="Screenshot \(pixels unchanged\)"/);
     assert.doesNotMatch(md, /alt="Current"/);
+  });
+});
+
+describe('approve keeps a removed ARIA baseline reported until it is pruned', () => {
+  it('approving a changed screenshot whose ARIA snapshot was turned off leaves the stray .aria.yml for --prune', async () => {
+    const outDir = await mkdtemp(path.join(process.env.PIXELGATE_TEST_TMP ?? os.tmpdir(), 'pixelgate-unit-'));
+    try {
+      const o = { outDir };
+      const put = async (rel: string) => {
+        await mkdir(path.dirname(path.join(outDir, rel)), { recursive: true });
+        await writeFile(path.join(outDir, rel), 'x');
+      };
+      await put('baseline/t/a.png');
+      await put('current/t/a.png');
+      await put('baseline/t/a.aria.yml');
+      const row: SnapshotResult = {
+        target: 't',
+        name: 'a',
+        status: 'changed',
+        baseline: 'baseline/t/a.png',
+        current: 'current/t/a.png',
+        aria: { status: 'removed', baseline: 'baseline/t/a.aria.yml' },
+      };
+      await writeReport(o, buildReport([row], ['changed']));
+
+      await approve(o);
+      const after = (await readReport(o)).results[0]!;
+      assert.deepEqual([after.status, after.aria?.status], ['unchanged', 'removed']);
+      assert.equal(existsSync(path.join(outDir, 'baseline/t/a.aria.yml')), true);
+
+      const pruned = await approve(o, { prune: true });
+      assert.equal(pruned.length, 1);
+      assert.equal(existsSync(path.join(outDir, 'baseline/t/a.aria.yml')), false);
+      assert.equal((await readReport(o)).results[0]!.aria, undefined);
+      assert.equal(await readFile(path.join(outDir, 'baseline/t/a.png'), 'utf8'), 'x', 'the screenshot baseline stays');
+    } finally {
+      await rm(outDir, { recursive: true, force: true });
+    }
   });
 });

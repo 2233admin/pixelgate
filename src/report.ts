@@ -207,13 +207,15 @@ export async function approve(o: OutDir, opts: ApproveOptions = {}): Promise<Sna
   // Reflect the approval in the report so a re-opened review page is not stale.
   const key = (r: SnapshotResult) => `${r.target}\0${r.name}`;
   const approved = new Set(done.map(key));
-  const settled = ({ aria, ...r }: SnapshotResult): SnapshotResult => ({
-    ...r,
-    status: 'unchanged',
-    diff: undefined,
-    // A pruned ARIA baseline is gone; an approved one now matches.
-    ...(aria && aria.status !== 'removed' ? { aria: { status: 'unchanged' as const, baseline: aria.baseline } } : {}),
-  });
+  const settled = ({ aria, ...r }: SnapshotResult): SnapshotResult => {
+    const out: SnapshotResult = { ...r, status: 'unchanged', diff: undefined };
+    // An approved ARIA snapshot now matches. A removed one stays reported until it is pruned,
+    // so a later `approve --prune` still finds the stray `.aria.yml`.
+    if (aria?.status === 'removed') {
+      if (!opts.prune) out.aria = aria;
+    } else if (aria) out.aria = { status: 'unchanged', baseline: aria.baseline };
+    return out;
+  };
   const results = report.results
     .filter((r) => !(r.status === 'removed' && approved.has(key(r))))
     .map((r) => (approved.has(key(r)) ? settled(r) : r));
