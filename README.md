@@ -128,6 +128,38 @@ Add to `.gitignore`:
 .pixelgate/report/
 ```
 
+## Comparators and formats
+
+Comparison is pluggable the way Vitest's `toMatchScreenshot` is: a comparator
+gets two decoded RGBA images and returns `{ pass, diffPixels, diffRatio, sizeChanged, diff, message }`.
+
+| `comparator` | judges | tolerance |
+| --- | --- | --- |
+| `pixelmatch` (default) | each pixel's colour; ignores detected anti-aliasing | `threshold`, `maxDiffPixelRatio`, `maxDiffPixels` |
+| `ssim` | each local window's luminance/contrast/structure, per R/G/B channel | `minSimilarity` (per window, default 0.8), `maxDiffPixelRatio` |
+
+`ssim` fails on any window below `minSimilarity`, not on the mean score, so a
+small change in a large page can't average away. It also runs per colour
+channel, because luma-only SSIM can't see a blue to green change of similar
+brightness. Measured on the calibration scenes in `test/unit.test.ts`:
+scattered ±20 noise and a +16 brightness shift pass, a 1px element shift, a
+hue change or a moved box fail. The failure message names the share of the
+image, the worst window and the mean.
+
+```ts
+export default defineConfig({
+  comparator: { name: 'ssim', options: { minSimilarity: 0.7 } },
+  // or your own, same contract:
+  comparators: { myDiff: (reference, actual, { createDiff }) => ({ pass, diffPixels, diffRatio, sizeChanged, diff, message }) },
+  format: 'jpeg',          // baseline/current files: 'png' (default) | 'jpeg' | a key of `codecs`
+  codecs: { /* name: { extension, decode, encode, screenshot? } */ },
+});
+```
+
+JPEG (quality 90) makes baselines several times smaller; Playwright captures
+it natively. Custom codecs (e.g. WebP via `sharp`) get a PNG capture
+re-encoded. Diff images are always PNG.
+
 ## Vite
 
 Let pixelgate start your Vite app for the run; page URLs become relative:
