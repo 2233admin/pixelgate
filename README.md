@@ -658,14 +658,32 @@ opens the bumps weekly; `deps:check` must be clean before a release.
 Releases go out through [`.github/workflows/release.yml`](.github/workflows/release.yml)
 with npm trusted publishing: no npm token is stored anywhere.
 
+One-time setup, on npmjs.com under `pixelgate-cli` → Settings → Trusted publishers, GitHub
+Actions:
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `2233admin` |
+| Repository | `pixelgate` |
+| Workflow filename | `release.yml` |
+| Environment name | `npm` |
+| Allowed actions | stage publish only |
+
+npm checks these fields only at publish time, and a new trusted publisher expires unless
+its first publish succeeds within 2 days: create it when a release is ready. Renaming the
+workflow file or the environment needs a new trusted publisher.
+
+Each release:
+
 1. Bump `version` in `package.json` on `main` (a normal PR). Pre-release versions
    (`1.2.0-rc.1`) are not supported yet.
 2. Tag that commit of `main` `v<version>` and push the tag.
 3. The workflow checks the tag against `package.json` and `main`, runs typecheck and tests,
-   stages the version on npm (`npm stage publish`, with provenance) and drafts the GitHub
-   release.
-4. A maintainer approves the staged version on npmjs.com (or `npm stage approve <id>`), which
-   asks for their 2FA. Only then is it installable. Then publish the draft release.
+   packs the tarball, stages it on npm (`npm stage publish`, with provenance) from a job that
+   installs nothing, and drafts the GitHub release.
+4. A maintainer approves the staged version on npmjs.com (Staged Packages, or
+   `npm stage approve <id>`), which asks for their 2FA. Only then is it installable. Then
+   publish the draft release.
 
 ## Roadmap
 

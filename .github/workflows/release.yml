@@ -1,10 +1,11 @@
 name: release
 
 # Publish to npm with trusted publishing (OIDC): no npm token is stored anywhere.
-# Push a tag `v<version>` matching package.json on a commit of main; this workflow tests that
-# commit, stages the version on npm and drafts the GitHub release. A maintainer then approves
-# the staged version on npmjs.com (or `npm stage approve <id>`), which needs their 2FA (OIDC
-# can stage but never approve), and publishes the draft release. See "Releasing" in README.md.
+# Push a tag `v<version>` matching package.json on a commit of main. This workflow tests that
+# commit and packs it, stages the tarball on npm and drafts the GitHub release. A maintainer
+# then approves the staged version on npmjs.com (Staged Packages, or `npm stage approve <id>`),
+# which needs their 2FA (OIDC can stage but never approve), and publishes the draft release.
+# See "Releasing" in README.md.
 #
 # npm's trusted-publisher config names this file (`release.yml`) and the `npm` environment:
 # rename either one and publishing fails until the config is recreated on npmjs.com.
@@ -20,13 +21,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  # Runs the dev dependencies' code (install scripts, build, tests): no OIDC token here, so
+  # nothing in it can talk to npm as this repository.
+  build:
     runs-on: ubuntu-latest
-    environment: npm
-    # No write token next to the dev dependencies' code: this job can only stage on npm.
     permissions:
       contents: read
-      id-token: write # npm trusted publishing (OIDC) and provenance
     steps:
       - uses: actions/checkout@v7
         with:
@@ -41,7 +41,7 @@ jobs:
         with:
           version: 12
 
-      - name: Check tag, version and npm
+      - name: Check tag and version
         shell: bash
         run: |
           set -euo pipefail
@@ -59,15 +59,6 @@ jobs:
             echo "::error::${tag} is not on main"
             exit 1
           fi
-          # Trusted publishing needs npm 11.5.1 or later.
-          npm --version
-          node -e "
-            const [a, b, c] = process.argv[1].split('.').map(Number);
-            if (a < 11 || (a === 11 && (b < 5 || (b === 5 && c < 1)))) {
-              console.error('::error::npm ' + process.argv[1] + ' is older than 11.5.1');
-              process.exit(1);
-            }
-          " "$(npm --version)"
           if npm view "pixelgate-cli@${version}" version >/dev/null 2>&1; then
             echo "::error::pixelgate-cli@${version} is already on npm"
             exit 1
@@ -84,14 +75,65 @@ jobs:
         env:
           PIXELGATE_TEST_TMP: ${{ runner.temp }}
 
-      # What goes into the tarball, in the log.
-      - run: npm pack --dry-run
+      # Lists the tarball's files in the log.
+      - name: Pack
+        run: |
+          mkdir -p "${RUNNER_TEMP}/pack"
+          npm pack --pack-destination "${RUNNER_TEMP}/pack"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/pack/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  # Holds the OIDC token: installs nothing and runs no package script, only npm itself.
+  stage:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write # npm trusted publishing (OIDC) and provenance
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          package-manager-cache: false
+
+      - name: Check npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Trusted publishing needs npm 11.5.1, `npm stage` needs 11.15.0.
+          npm --version
+          node -e "
+            const [a, b] = process.argv[1].split('.').map(Number);
+            if (a < 11 || (a === 11 && b < 15)) {
+              console.error('::error::npm ' + process.argv[1] + ' is older than 11.15.0');
+              process.exit(1);
+            }
+          " "$(npm --version)"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: npm-tarball
+          path: ${{ runner.temp }}/pack
 
       - name: Stage on npm
-        run: npm stage publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          tarballs=("${RUNNER_TEMP}"/pack/*.tgz)
+          if [ "${#tarballs[@]}" -ne 1 ]; then
+            echo "::error::expected one tarball, found ${#tarballs[@]}"
+            exit 1
+          fi
+          npm stage publish --ignore-scripts "${tarballs[0]}"
 
   release:
-    needs: publish
+    needs: stage
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the draft release
