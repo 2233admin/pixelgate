@@ -1,5 +1,7 @@
 # pixelgate
 
+[![CI](https://github.com/2233admin/pixelgate/actions/workflows/ci.yml/badge.svg)](https://github.com/2233admin/pixelgate/actions/workflows/ci.yml)
+
 Self-hosted visual regression testing. MIT licensed, no SaaS, no account.
 
 pixelgate renders your pages or Storybook stories in real browsers (Playwright),

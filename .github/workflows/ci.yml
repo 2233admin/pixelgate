@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly: new upstream releases (latest-deps policy) and browser/OS image drift.
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Floor of `engines` in package.json and of vitest/vite.
+          - { os: ubuntu-latest, node: '22.18' }
+          - { os: ubuntu-latest, node: lts/* }
+          - { os: ubuntu-latest, node: current }
+          # Baselines are per platform; make sure every platform's paths and rendering work.
+          - { os: windows-latest, node: lts/* }
+          - { os: macos-latest, node: lts/* }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+
+      # Version comes from "packageManager" in package.json.
+      - uses: pnpm/action-setup@v6
+        with:
+          cache: true
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+            ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      # --with-deps installs the Linux system libraries even when the browser itself is cached.
+      - run: pnpm exec playwright install --with-deps chromium-headless-shell
+
+      - run: pnpm typecheck
+
+      # CI is set here, so pixelgate's own default is baseline mode `none`;
+      # the tests pin the modes they exercise.
+      - run: pnpm test
+        env:
+          PIXELGATE_TEST_TMP: ${{ runner.temp }}
+
+  latest-deps:
+    # Policy: every dependency on its latest release. Red here means "run pnpm deps:latest".
+    name: dependencies are latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v6
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm deps:check
