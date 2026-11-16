@@ -31,6 +31,9 @@ so `playwright install` always fetches the browser build that version expects.
 `vite` and `vitest` are optional peers, used only by the adapters below.
 
 Node 22.18 or newer (so `pixelgate.config.ts` loads without a build step).
+The config is an ES module even in a `"type": "commonjs"` package (what
+`npm init -y` writes): pixelgate loads a `.ts` / `.js` config with `import` /
+`export` statements, and the project files it imports, as ES modules.
 
 ## Configure
 
@@ -102,6 +105,7 @@ pixelgate approve --prune   # also delete baselines whose page/story is gone
 pixelgate approve --from <dir>  # accept from another run's out dir, e.g. a downloaded CI artifact
 pixelgate summary      # the last report as Markdown (PR comment, CI job summary)
 pixelgate run --json   # report JSON on stdout, for scripts and agents
+pixelgate --version
 ```
 
 Exit codes: `0` pass, `1` a status or check finding listed in `failOn` is present, `2` usage or config error.

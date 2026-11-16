@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { findConfigFile, loadConfig } from './config.js';
@@ -9,6 +10,7 @@ import { run } from './run.js';
 const HELP = `pixelgate - visual regression gate
 
 Usage:
+  pixelgate --version
   pixelgate run      [--config <file>] [--only <glob>]... [--json] [-u | --ci]
   pixelgate approve  [--config <file> | --out-dir <dir>] [--from <dir>] [--only <glob>]... [--prune]
   pixelgate summary  [--config <file> | --out-dir <dir>] [--id <id>] [--report-url <url>]
@@ -52,8 +54,15 @@ async function main(argv: string[]): Promise<number> {
       'image-base': { type: 'string' },
       'accept-command': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
+      version: { type: 'boolean', short: 'v' },
     },
   });
+  if (values.version) {
+    // package.json sits one level up from both src/ and dist/.
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+    console.log(pkg.version);
+    return 0;
+  }
   const cmd = positionals[0];
   if (values.help || !cmd) {
     console.log(HELP);

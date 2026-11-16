@@ -1,7 +1,8 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { registerHooks } from 'node:module';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { devices, type Page } from 'playwright';
 import { CODECS, COMPARATORS, type Codec, type Comparator } from './compare.js';
 
@@ -523,9 +524,39 @@ export async function loadConfig(cwd: string, explicit?: string, overrides: Conf
   if (file.endsWith('.json')) {
     raw = JSON.parse(await readFile(file, 'utf8')) as Config;
   } else {
-    const mod = (await import(pathToFileURL(file).href)) as { default?: Config };
+    const mod = await importConfig(file);
     if (!mod.default) throw new Error(`${file} must have a default export`);
     raw = mod.default;
   }
   return resolveConfig(raw, path.dirname(file), overrides);
+}
+
+/** An `import` / `export` statement at the start of a line: ES module syntax. */
+const ESM_STATEMENT = /^\s*(?:import(?:\s+[\w{*'"$]|\s*[{*'"])|export(?:\s+|\s*[{*]))/m;
+
+/**
+ * Import a config file. Node takes the module format of `.ts` / `.js` files from the nearest
+ * package.json, so in a `"type": "commonjs"` package (`npm init -y` writes one) an ES module
+ * config, and the project files it imports, would load as CommonJS and fail. While importing,
+ * a load hook loads such a file as an ES module when it has `import` / `export` statements,
+ * as Node does in a package without `type`. Dependencies (`node_modules`) keep Node's rules.
+ */
+async function importConfig(file: string): Promise<{ default?: Config }> {
+  const hooks = registerHooks({
+    load(url, context, nextLoad) {
+      const loaded = nextLoad(url, context);
+      if (loaded.format !== 'commonjs' && loaded.format !== 'commonjs-typescript') return loaded;
+      if (!url.startsWith('file:') || url.includes('/node_modules/')) return loaded;
+      const filePath = fileURLToPath(url);
+      if (!/\.[jt]s$/.test(filePath)) return loaded;
+      const source = readFileSync(filePath, 'utf8');
+      if (!ESM_STATEMENT.test(source)) return loaded;
+      return { format: filePath.endsWith('.ts') ? 'module-typescript' : 'module', source, shortCircuit: true };
+    },
+  });
+  try {
+    return (await import(pathToFileURL(file).href)) as { default?: Config };
+  } finally {
+    hooks.deregister();
+  }
 }

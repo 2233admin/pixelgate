@@ -3,6 +3,14 @@
   "version": "0.1.0",
   "description": "Self-hosted visual regression testing bot: Playwright capture, pixel diff, static review report, CI/agent gate.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/2233admin/pixelgate.git"
+  },
+  "homepage": "https://github.com/2233admin/pixelgate#readme",
+  "bugs": {
+    "url": "https://github.com/2233admin/pixelgate/issues"
+  },
   "type": "module",
   "bin": {
     "pixelgate": "./dist/cli.js"
