@@ -1,4 +1,4 @@
-import { expect, test } from 'pixelgate/playwright';
+import { expect, test } from 'pixelgate-cli/playwright';
 
 // The e2e test changes the card's colour (CARD_COLOR) and label (CARD_LABEL) between runs.
 const color = process.env.CARD_COLOR ?? '#2563eb';

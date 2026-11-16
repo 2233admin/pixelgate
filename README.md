@@ -22,9 +22,12 @@ baselines live in your repo, the report is a folder of PNGs plus one HTML file.
 ## Install
 
 ```bash
-pnpm add -D pixelgate playwright
+pnpm add -D pixelgate-cli playwright
 pnpm exec playwright install chromium   # plus firefox / webkit if you target them
 ```
+
+The npm package is `pixelgate-cli` (`pixelgate` is too close to an existing
+package name); the command it installs is `pixelgate`.
 
 `playwright` is a peer dependency: pixelgate drives your project's Playwright,
 so `playwright install` always fetches the browser build that version expects.
@@ -42,7 +45,7 @@ at the top of the config, or name them `.mts` / `.mjs`.
 `pixelgate.config.ts` in the project root:
 
 ```ts
-import { defineConfig } from 'pixelgate';
+import { defineConfig } from 'pixelgate-cli';
 
 export default defineConfig({
   targets: {
@@ -226,7 +229,7 @@ work the same for both:
 ```ts
 // vitest.config.ts
 import { playwright } from '@vitest/browser-playwright';
-import { PixelgateReporter, pixelgateScreenshots } from 'pixelgate/vitest';
+import { PixelgateReporter, pixelgateScreenshots } from 'pixelgate-cli/vitest';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
@@ -280,10 +283,10 @@ comparator and format, checks and ARIA snapshots.
 ```ts
 // playwright.config.ts
 import { defineConfig, devices } from '@playwright/test';
-import type { PixelgateOptions } from 'pixelgate/playwright';
+import type { PixelgateOptions } from 'pixelgate-cli/playwright';
 
 export default defineConfig<{ pixelgateOptions: PixelgateOptions }>({
-  reporter: [['list'], ['pixelgate/playwright-reporter']], // required
+  reporter: [['list'], ['pixelgate-cli/playwright-reporter']], // required
   use: { pixelgateOptions: { ariaSnapshot: true, checks: { a11y: true } } },
   projects: [
     { name: 'desktop', use: { browserName: 'chromium' } },
@@ -294,7 +297,7 @@ export default defineConfig<{ pixelgateOptions: PixelgateOptions }>({
 
 ```ts
 // card.spec.ts
-import { expect, test } from 'pixelgate/playwright'; // Playwright's test + expect, plus `pixelgate`
+import { expect, test } from 'pixelgate-cli/playwright'; // Playwright's test + expect, plus `pixelgate`
 
 test('card', async ({ page, pixelgate }) => {
   await page.goto('/cards');
@@ -630,7 +633,7 @@ This repository gates `test/fixtures/vite-app` with its own action:
 ## Programmatic API
 
 ```ts
-import { loadConfig, run, approve } from 'pixelgate';
+import { loadConfig, run, approve } from 'pixelgate-cli';
 
 const cfg = await loadConfig(process.cwd());
 const report = await run(cfg, { only: ['home'] });

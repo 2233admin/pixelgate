@@ -1,4 +1,4 @@
-/** What `pixelgate/playwright` and its reporter share; free of @playwright/test at runtime. */
+/** What `pixelgate-cli/playwright` and its reporter share; free of @playwright/test at runtime. */
 import path from 'node:path';
 import type { TestInfo } from '@playwright/test';
 import { isCI, resolveConfig, type Config, type FailOn, type ResolvedConfig, type UpdateMode } from './config.js';

@@ -1,6 +1,6 @@
 /**
- * Playwright Test reporter for `pixelgate/playwright`: add it next to your usual reporters,
- * `reporter: [['list'], ['pixelgate/playwright-reporter']]`.
+ * Playwright Test reporter for `pixelgate-cli/playwright`: add it next to your usual reporters,
+ * `reporter: [['list'], ['pixelgate-cli/playwright-reporter']]`.
  *
  * It clears `current/` and `diff/` before the run, collects the result each
  * `pixelgate.screenshot()` attached (the last retry of a test wins), writes the review page

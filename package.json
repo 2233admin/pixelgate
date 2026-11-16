@@ -1,5 +1,5 @@
 {
-  "name": "pixelgate",
+  "name": "pixelgate-cli",
   "version": "0.1.0",
   "description": "Self-hosted visual regression testing bot: Playwright capture, pixel diff, static review report, CI/agent gate.",
   "license": "MIT",
