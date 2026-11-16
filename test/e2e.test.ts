@@ -80,6 +80,13 @@ beforeAll(async () => {
       '/dynamic': () => dynamic('data-pixelgate-hide'),
       '/dynamic-plain': () => dynamic(''),
       '/dark': () => dark,
+      '/a11y': () => `<!doctype html><html lang="en"><body style="margin:0">
+<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="40" height="40"><div id="ok"><button>Ok</button></div></body></html>`,
+      '/cards': () => `<!doctype html><html lang="en"><body style="margin:0">
+<div class="card"><button>Ok</button></div>
+<div class="card"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="40" height="40"></div></body></html>`,
+      '/wide': () => `<!doctype html><body style="margin:0"><div style="width:900px;height:10px;background:#000"></div></body>`,
+      '/boom': () => `<!doctype html><body style="margin:0"><script>throw new Error('boom')</script></body>`,
       '/external': external,
       '/ws': () => `<!doctype html><body style="margin:0">
 <script>window.sock = new WebSocket('ws://localhost:${port}/sock');</script></body>`,
@@ -311,6 +318,56 @@ describe('determinism: hide, ignore, mask, allowedHostnames', () => {
   it('allowedHostnames also blocks WebSockets (they bypass request routing)', async () => {
     const r = await run(one('.pg-ws', [{ name: 'p', url: `${origin}/ws` }], { allowedHostnames: [] }));
     assert.deepEqual(r.results[0]!.blocked, ['localhost'], JSON.stringify(r.results));
+  });
+});
+
+describe('checks without a baseline: a11y, overflow, page errors', () => {
+  const at = (outDir: string, url: string, extra: Partial<Config> = {}, page: Partial<NonNullable<Config['pages']>[number]> = {}) =>
+    cfgWith({ outDir, targets: { desktop: { viewport: '400x200' } }, pages: [{ name: 'p', url: `${origin}${url}`, ...page }], ...extra });
+
+  it('a11y: axe-core finds the image without alt; scoped to a clean selector it finds nothing', async () => {
+    const page = await run(at('.pg-a11y', '/a11y', { checks: { a11y: true } }));
+    const ids = page.results[0]!.a11y?.map((v) => v.id) ?? [];
+    assert.ok(ids.includes('image-alt'), JSON.stringify(page.results[0]));
+    assert.equal(page.summary.a11y, 1);
+    assert.equal(page.failed, false, 'default failOn: reported only');
+
+    const scoped = await run(at('.pg-a11y-ok', '/a11y', { checks: { a11y: true } }, { selector: '#ok' }));
+    assert.equal(scoped.results[0]!.a11y, undefined, JSON.stringify(scoped.results[0]));
+  });
+
+  it('a11y checks the element the screenshot captured: the first match, Playwright selectors too', async () => {
+    // Second `.card` has an image without alt, but the screenshot is of the first one.
+    const first = await run(at('.pg-a11y-first', '/cards', { checks: { a11y: true } }, { selector: '.card' }));
+    assert.equal(first.results[0]!.a11y, undefined, JSON.stringify(first.results[0]));
+    const nth = await run(at('.pg-a11y-nth', '/cards', { checks: { a11y: true } }, { selector: '.card >> nth=1' }));
+    assert.deepEqual(nth.results[0]!.a11y?.map((v) => v.id), ['image-alt'], JSON.stringify(nth.results[0]));
+  });
+
+  it('overflow: measured on the target that enables it, absent on a page that fits', async () => {
+    const wide = await run(at('.pg-wide', '/wide', { targets: { desktop: { viewport: '400x200', checks: { overflow: true } } } }));
+    assert.equal(wide.results[0]!.overflowPx, 500);
+    assert.equal(wide.summary.overflow, 1);
+    const fits = await run(at('.pg-fits', '/dark', { checks: { overflow: true } }));
+    assert.equal(fits.results[0]!.overflowPx, undefined);
+  });
+
+  it('page errors: counted always, failing only when failOn lists them', async () => {
+    const reportOnly = await run(at('.pg-boom', '/boom'));
+    assert.match(reportOnly.results[0]!.pageErrors?.[0] ?? '', /boom/);
+    assert.equal(reportOnly.summary.pageErrors, 1);
+    assert.equal(reportOnly.failed, false);
+    const gated = await run(at('.pg-boom-gate', '/boom', { failOn: ['changed', 'error', 'pageErrors'] }));
+    assert.equal(gated.failed, true);
+  });
+
+  it('approve accepts the pixels but not the findings: a gating check still fails', async () => {
+    const cfg = () => at('.pg-a11y-approve', '/a11y', { checks: { a11y: true }, failOn: ['changed', 'error', 'a11y'] });
+    assert.equal((await run(cfg())).failed, true);
+    await approve(cfg());
+    const after = JSON.parse(await readFile(path.join(tmp, '.pg-a11y-approve', 'report', 'report.json'), 'utf8'));
+    assert.equal(after.summary.a11y, 1);
+    assert.equal(after.failed, true);
   });
 });
 

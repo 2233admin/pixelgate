@@ -14,7 +14,7 @@ import {
   type DecodedImage,
 } from '../src/compare.js';
 import { devices } from 'playwright';
-import { isCI, parseViewport, resolveConfig } from '../src/config.js';
+import { isCI, parseViewport, resolveChecks, resolveConfig } from '../src/config.js';
 import { resolveUrl, safeName } from '../src/names.js';
 import { determineOutcome, type OutcomeInput } from '../src/outcome.js';
 import { buildReport, summarize, type Report, type SnapshotResult } from '../src/report.js';
@@ -516,5 +516,60 @@ describe('mask and allowedHostnames helpers', () => {
       mask: ['.clock'],
     });
     assert.deepEqual(s!.mask, ['.clock']);
+  });
+});
+
+describe('checks config, summary and markdown', () => {
+  it('resolveChecks: a11y defaults to WCAG 2.0/2.1 A+AA; a target overrides the global setting', () => {
+    const g = resolveChecks('t', { a11y: true }, undefined);
+    assert.deepEqual(g.a11y, { tags: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'], disableRules: [], minImpact: 'minor' });
+    assert.equal(g.overflow, false);
+    const t = resolveChecks('t', { a11y: true }, { a11y: false, overflow: true });
+    assert.deepEqual(t, { overflow: true });
+    assert.throws(() => resolveChecks('Target "x"', { a11y: { minImpact: 'huge' as 'minor' } }, undefined), /minImpact/);
+  });
+
+  it('failOn accepts statuses and checks, rejects anything else', () => {
+    const base = { pages: [{ name: 'p', url: 'http://x/' }] };
+    assert.deepEqual(resolveConfig({ ...base, failOn: ['changed', 'a11y'] }, '/tmp').failOn, ['changed', 'a11y']);
+    assert.throws(() => resolveConfig({ ...base, failOn: ['changed', 'bogus' as 'a11y'] }, '/tmp'), /unknown "bogus"/);
+  });
+
+  it('summarize counts findings from fields, so approved (unchanged) rows still count', () => {
+    const rs = [
+      { target: 't', name: 'a', status: 'unchanged' as const, a11y: [{ id: 'image-alt', help: '', helpUrl: '', nodes: 1, targets: [] }] },
+      { target: 't', name: 'b', status: 'unchanged' as const, overflowPx: 12, pageErrors: ['x'] },
+    ];
+    const s = summarize(rs, ['changed', 'error']);
+    assert.deepEqual([s.summary.a11y, s.summary.overflow, s.summary.pageErrors], [1, 1, 1]);
+    assert.equal(s.failed, false);
+    assert.equal(summarize(rs, ['overflow']).failed, true);
+  });
+
+  it('markdown: checks section says which checks gate and which only report', () => {
+    const report = buildReport(
+      [
+        {
+          target: 'phone',
+          name: 'home',
+          status: 'unchanged',
+          a11y: [{ id: 'image-alt', impact: 'critical', help: 'Images must have alternate text', helpUrl: 'u', nodes: 2, targets: ['img'] }],
+          overflowPx: 37,
+        },
+      ],
+      ['changed', 'error', 'a11y'],
+    );
+    const md = renderMarkdown(report);
+    assert.match(md, /### pixelgate: failed/);
+    assert.match(md, /Checks: 1 with accessibility violations, 1 overflowing the viewport\./);
+    assert.match(md, /Failing the gate: `a11y`\. Reported only \(not in `failOn`\): `overflow`\./);
+    assert.match(md, /\| a11y \| `home` \| `phone` \| 1 rule: `image-alt` \(critical\) \|/);
+    assert.match(md, /\| overflow \| `home` \| `phone` \| 37px past the right edge \|/);
+  });
+
+  it('markdown: a report from before checks (no counters) still renders', () => {
+    const old = { ...buildReport([{ target: 't', name: 'a', status: 'changed' as const }], ['changed']) };
+    for (const k of ['pageErrors', 'a11y', 'overflow'] as const) delete (old.summary as Partial<typeof old.summary>)[k];
+    assert.doesNotMatch(renderMarkdown(old), /Checks/);
   });
 });

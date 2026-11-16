@@ -1,5 +1,5 @@
-import type { Status } from './config.js';
-import type { Report, SnapshotResult } from './report.js';
+import type { CheckName, Status } from './config.js';
+import { checkFindings, type Report, type SnapshotResult } from './report.js';
 
 export interface MarkdownOptions {
   /**
@@ -74,16 +74,54 @@ function imageUrl(base: string, rel: string): string {
   return base.replace(/\/+$/, '') + '/' + rel.split('/').map(encodeURIComponent).join('/');
 }
 
+const CHECK_LABEL: Record<CheckName, string> = {
+  pageErrors: 'with page errors',
+  a11y: 'with accessibility violations',
+  overflow: 'overflowing the viewport',
+};
+
 function headline(report: Report, id?: string): string[] {
   const s = report.summary;
   const counts = LISTED.filter((st) => s[st] > 0).map((st) => `${s[st]} ${st}`);
   if (s.unchanged > 0) counts.push(`${s.unchanged} unchanged`);
+  // Reports from before the checks have no check counters.
+  const checks = (Object.keys(CHECK_LABEL) as CheckName[]).filter((c) => (s[c] ?? 0) > 0).map((c) => `${s[c]} ${CHECK_LABEL[c]}`);
   return [
     commentMarker(id),
     `### pixelgate: ${report.failed ? 'failed' : 'passed'}`,
     '',
-    `${counts.join(', ') || 'no snapshots'} (${s.total} total).`,
+    `${counts.join(', ') || 'no snapshots'} (${s.total} total).` + (checks.length ? ` Checks: ${checks.join(', ')}.` : ''),
   ];
+}
+
+function checkDetail(r: SnapshotResult, c: CheckName): string {
+  if (c === 'overflow') return `${r.overflowPx}px past the right edge`;
+  if (c === 'pageErrors') {
+    const first = r.pageErrors![0]!.split('\n')[0]!;
+    const more = r.pageErrors!.length > 1 ? ` (+${r.pageErrors!.length - 1} more)` : '';
+    return (first.length > 150 ? first.slice(0, 149) + '…' : first) + more;
+  }
+  const v = r.a11y!;
+  const ids = v.slice(0, 4).map((x) => `${code(x.id)}${x.impact ? ` (${x.impact})` : ''}`);
+  return `${v.length} rule${v.length > 1 ? 's' : ''}: ${ids.join(', ')}${v.length > 4 ? ', …' : ''}`;
+}
+
+/** Snapshots with check findings; says which checks gate (in `failOn`) and which only report. */
+function checksTable(report: Report, maxRows: number): string[] {
+  const rows: string[] = [];
+  for (const r of report.results) {
+    for (const c of checkFindings(r)) rows.push(`| ${c} | ${code(r.name)} | ${code(r.target)} | ${cell(checkDetail(r, c))} |`);
+  }
+  if (!rows.length) return [];
+  const present = new Set(report.results.flatMap(checkFindings));
+  const gating = [...present].filter((c) => report.failOn.includes(c));
+  const reportOnly = [...present].filter((c) => !report.failOn.includes(c));
+  const note = [
+    gating.length ? `Failing the gate: ${gating.map(code).join(', ')}.` : '',
+    reportOnly.length ? `Reported only (not in \`failOn\`): ${reportOnly.map(code).join(', ')}.` : '',
+  ].filter(Boolean);
+  const more = rows.length > maxRows ? ['', `…and ${rows.length - maxRows} more in the full report.`] : [];
+  return ['', '#### Checks', '', note.join(' '), '', '| Check | Snapshot | Target | Detail |', '| --- | --- | --- | --- |', ...rows.slice(0, maxRows), ...more];
 }
 
 function table(listed: SnapshotResult[], maxRows: number): string[] {
@@ -145,6 +183,7 @@ export function renderMarkdown(report: Report, opts: MarkdownOptions = {}): stri
     [
       ...headline(report, opts.id),
       ...table(listed, maxRows),
+      ...checksTable(report, maxRows),
       ...screenshots(listed, opts.imageBaseUrl, report.failed, maxImages),
       ...footer(report, opts),
     ].join('\n') + '\n'

@@ -51,7 +51,9 @@ input[type=range] { width:100%; }
 const report = JSON.parse(document.getElementById('data').textContent);
 const STATUSES = ['changed', 'error', 'removed', 'added', 'updated', 'unchanged'];
 const s = report.summary;
-let filter = s.changed + s.error + s.removed > 0 ? 'attention' : 'all';
+const findings = (r) => [r.pageErrors?.length && 'pageErrors', r.a11y?.length && 'a11y', r.overflowPx && 'overflow'].filter(Boolean);
+const withChecks = report.results.filter((r) => findings(r).length).length;
+let filter = s.changed + s.error + s.removed > 0 ? 'attention' : withChecks > 0 ? 'checks' : 'all';
 let view = 'side';
 const src = (p) => '../' + p;
 const el = (tag, attrs = {}, kids = []) => {
@@ -97,6 +99,14 @@ function card(r) {
   if (r.error) c.append(el('div', { class: 'err', text: r.error }));
   if (r.pageErrors?.length) c.append(el('div', { class: 'err', text: 'page errors:\\n' + r.pageErrors.join('\\n') }));
   if (r.blocked?.length) c.append(el('div', { class: 'err', text: 'blocked requests to: ' + r.blocked.join(', ') }));
+  if (r.overflowPx) c.append(el('div', { class: 'err', text: 'overflow: the page reaches ' + r.overflowPx + 'px past the right edge of the viewport' }));
+  if (r.a11y?.length) {
+    const list = el('ul', { class: 'err', style: 'margin:0;padding:8px 12px 8px 28px' }, r.a11y.map((v) => el('li', {}, [
+      el('a', { href: v.helpUrl, target: '_blank', rel: 'noreferrer', text: v.id }),
+      document.createTextNode(' (' + (v.impact || 'n/a') + ', ' + v.nodes + ' element' + (v.nodes > 1 ? 's' : '') + '): ' + v.help + (v.targets.length ? ' - ' + v.targets.join(', ') : '')),
+    ])));
+    c.append(el('div', { class: 'err', text: 'accessibility violations:' }), list);
+  }
   if (r.status === 'changed' && view === 'slider') c.append(slider(r));
   else if (r.status === 'changed' && view === 'diff') c.append(el('div', { class: 'imgs' }, [figure('diff', r.diff)]));
   else {
@@ -109,11 +119,12 @@ function card(r) {
   return c;
 }
 function render() {
-  buttons('filters', [['attention', 'Needs review (' + (s.changed + s.error + s.removed) + ')'], ['all', 'All (' + s.total + ')'],
-    ...STATUSES.map((k) => [k, k + ' (' + s[k] + ')'])], () => filter, (v) => (filter = v));
+  buttons('filters', [['attention', 'Needs review (' + (s.changed + s.error + s.removed) + ')'], ['checks', 'Checks (' + withChecks + ')'],
+    ['all', 'All (' + s.total + ')'], ...STATUSES.map((k) => [k, k + ' (' + s[k] + ')'])], () => filter, (v) => (filter = v));
   buttons('views', [['side', 'Side by side'], ['diff', 'Diff only'], ['slider', 'Slider']], () => view, (v) => (view = v));
   const rows = report.results.filter((r) =>
-    filter === 'all' ? true : filter === 'attention' ? ['changed', 'error', 'removed'].includes(r.status) : r.status === filter);
+    filter === 'all' ? true : filter === 'attention' ? ['changed', 'error', 'removed'].includes(r.status)
+      : filter === 'checks' ? findings(r).length > 0 : r.status === filter);
   const list = document.getElementById('list');
   list.replaceChildren(...(rows.length ? rows.map(card) : [el('p', { class: 'empty', text: 'Nothing here.' })]));
 }

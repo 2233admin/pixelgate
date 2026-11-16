@@ -104,7 +104,7 @@ pixelgate summary      # the last report as Markdown (PR comment, CI job summary
 pixelgate run --json   # report JSON on stdout, for scripts and agents
 ```
 
-Exit codes: `0` pass, `1` a status listed in `failOn` is present, `2` usage or config error.
+Exit codes: `0` pass, `1` a status or check finding listed in `failOn` is present, `2` usage or config error.
 
 Snapshot statuses:
 
@@ -349,6 +349,40 @@ stays on.
 In Vitest browser mode, Vitest takes the screenshots, so these options do not
 apply there. With the Playwright provider, `toMatchScreenshot`'s
 `screenshotOptions` take Playwright's own `mask` and `style`.
+
+## Checks: accessibility, overflow, page errors
+
+Some problems need no baseline to be problems. pixelgate can check every
+snapshot for them, right after its screenshot (Happo: accessibility targets,
+`detectHorizontalOverflow`, render errors):
+
+```ts
+export default defineConfig({
+  checks: {
+    a11y: true, // axe-core, WCAG 2.0 + 2.1 A/AA
+    // a11y: { tags: ['wcag22aa'], disableRules: ['color-contrast'], minImpact: 'serious' },
+  },
+  targets: {
+    desktop: { viewport: '1280x720' },
+    phone: { device: 'Pixel 7', checks: { overflow: true } }, // per target
+  },
+  failOn: ['changed', 'error', 'a11y'], // make a check gate
+});
+```
+
+| check | finds | in the result |
+| --- | --- | --- |
+| `a11y` | axe-core rule violations; for a `selector` snapshot, in the element the screenshot captured | `a11y`: rule id, impact, help link, element count, first selectors |
+| `overflow` | a page wider than the viewport, i.e. one that scrolls sideways | `overflowPx`: how far past the right edge |
+| page errors | uncaught exceptions while rendering (always collected) | `pageErrors` |
+
+Findings are counted in the summary (`summary.a11y`, `summary.overflow`,
+`summary.pageErrors`) and shown on the review page (filter "Checks"), in the
+CLI output and in the pull-request comment. They fail the run only when
+`failOn` lists them (`'a11y'`, `'overflow'`, `'pageErrors'`), so you can turn
+a check on, look at what it finds, and then make it gate. `approve` accepts
+pixels, not findings: an approved snapshot that still has a gating finding
+keeps the run failing until the page is fixed.
 
 ## CI and pull requests
 
