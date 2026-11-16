@@ -6,6 +6,8 @@ dist/
 test/.tmp/
 # The vitest e2e test writes here; vite-app keeps the visual workflow's baselines.
 test/fixtures/vitest-app/.pixelgate/
+test/fixtures/playwright-app/.pixelgate/
+test/fixtures/playwright-app/test-results/
 test/fixtures/**/dist/
 .vitest/
 *.timestamp-*.mjs

@@ -264,6 +264,64 @@ Vitest also copies failure images into its own attachments directory
 Comparison, retries and thresholds stay Vitest's (`comparatorName`,
 `comparatorOptions` in the same `toMatchScreenshot` block).
 
+## Playwright Test
+
+Take pixelgate snapshots inside your Playwright tests, after the test has put
+the page in the state you want (Happo: `happoScreenshot`). They run pixelgate's
+own capture on the test's page: the stability loop, hide and mask, the
+comparator and format, checks and ARIA snapshots.
+
+```ts
+// playwright.config.ts
+import { defineConfig, devices } from '@playwright/test';
+import type { PixelgateOptions } from 'pixelgate/playwright';
+
+export default defineConfig<{ pixelgateOptions: PixelgateOptions }>({
+  reporter: [['list'], ['pixelgate/playwright-reporter']], // required
+  use: { pixelgateOptions: { ariaSnapshot: true, checks: { a11y: true } } },
+  projects: [
+    { name: 'desktop', use: { browserName: 'chromium' } },
+    { name: 'phone', use: { ...devices['Pixel 7'] } },
+  ],
+});
+```
+
+```ts
+// card.spec.ts
+import { expect, test } from 'pixelgate/playwright'; // Playwright's test + expect, plus `pixelgate`
+
+test('card', async ({ page, pixelgate }) => {
+  await page.goto('/cards');
+  await page.getByRole('button', { name: 'More' }).click();
+  await pixelgate.screenshot('card/expanded', { locator: page.locator('.card').first() });
+  await pixelgate.screenshot('cards page', { mask: [page.locator('.clock')] });
+});
+```
+
+- `pixelgate.screenshot(name, { locator, fullPage, mask, maxHeight, maxWidth,
+  includeOutlinesAndShadows, ariaSnapshot })` compares with
+  `.pixelgate/baseline/<project>-<platform>/<name>.png` and returns the result.
+  The project's name is the target; `name` must be unique per project.
+- A change does not fail the test: the **reporter** writes the review page
+  and fails the run per `failOn`, like `pixelgate run`. It also attaches
+  expected / actual / diff images to the test, so Playwright's HTML report
+  shows them. Without the reporter the fixture refuses to run, since nothing
+  would gate. A capture error does fail the test.
+- Baseline mode: `pixelgateOptions.update` if set; else `--update-snapshots`
+  (`all`/`changed` overwrite, `missing` writes new, `none` writes nothing),
+  else pixelgate's rule (nothing written in CI). `pixelgate approve` and
+  `approve --from` work on the result as on any other run.
+- `pixelgateOptions` takes the comparison, capture and check options of the
+  config file (`threshold`, `comparator`, `format`, `stabilize`,
+  `hideBehavior`, `mask`, `checks`, `ariaSnapshot`, `maxHeight`,
+  `applyPseudoClasses`, `failOn`, `outDir`, ...). Navigation, emulation and
+  network belong to Playwright: set the clock with `page.clock` and block
+  hosts with `page.route`.
+- Not yet: `removed` detection (a filtered run cannot tell a deleted test
+  from a skipped one) and merging sharded runs. Keep the Playwright Test
+  `outDir` apart from a `pixelgate run` one whose target has the same name,
+  or `run --prune` would see the other's baselines as removed.
+
 ## Stable screenshots
 
 Before every capture pixelgate:

@@ -1,13 +1,13 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { applyAriaOutcome, ARIA_EXT, ariaResult, determineAriaOutcome, withAria } from './aria.js';
+import { ARIA_EXT } from './aria.js';
 import { captureAll, type CaptureResult } from './capture.js';
 import { createMatcher, type Matcher } from './compare.js';
 import type { PageSnap, ResolvedConfig } from './config.js';
 import { resolveUrl, safeName } from './names.js';
-import { applyOutcome, determineOutcome, toResult } from './outcome.js';
-import { baselinePath, buildReport, currentPath, diffPath, rel, writeReport, type Report, type SnapshotResult } from './report.js';
+import { recordCapture } from './record.js';
+import { baselinePath, buildReport, rel, writeReport, type Report, type SnapshotResult } from './report.js';
 import { fetchStorybookPages, matchesAny } from './storybook.js';
 import { startVite } from './vite.js';
 
@@ -57,43 +57,9 @@ async function runAgainst(cfg: ResolvedConfig, opts: RunOptions, baseUrl: string
     reference: (dir, name) => readIfExists(baselinePath(cfg, dir, name, ext)),
     async onCapture(c: CaptureResult) {
       seen.add(`${c.target}/${safeName(c.name)}${ext}`);
-      const paths = {
-        baseline: baselinePath(cfg, c.target, c.name, ext),
-        current: currentPath(cfg, c.target, c.name, ext),
-        diff: diffPath(cfg, c.target, c.name),
-      };
-      const outcome = await determineOutcome({
-        shot: c.shot,
-        error: c.error,
-        reference: c.reference,
-        update: cfg.update,
-        compare: matcher.compare,
-      });
-      await applyOutcome(outcome, paths);
-      const r = toResult(outcome, {
-        o: cfg,
-        target: c.target,
-        name: c.name,
-        paths,
-        hadReference: c.reference !== null,
-        stableTimeoutMs: cfg.stabilize.stableTimeoutMs,
-      });
-      if (c.pageErrors.length) r.pageErrors = c.pageErrors;
-      if (c.blocked?.length) r.blocked = c.blocked;
-      if (c.capped) r.capped = c.capped;
-      if (c.unreadableStylesheets?.length) r.unreadableStylesheets = c.unreadableStylesheets;
-      if (c.a11y?.length) r.a11y = c.a11y;
-      if (c.overflowPx) r.overflowPx = c.overflowPx;
+      const r = await recordCapture(cfg, c, matcher.compare);
       // A failed capture proves nothing about its ARIA baseline: neither compared nor orphaned.
-      if (r.status === 'error') seenAria.add(`${c.target}/${safeName(c.name)}`);
-      else if (c.aria !== undefined) {
-        seenAria.add(`${c.target}/${safeName(c.name)}`);
-        const ariaPaths = { baseline: baselinePath(cfg, c.target, c.name, ARIA_EXT), current: currentPath(cfg, c.target, c.name, ARIA_EXT) };
-        const reference = existsSync(ariaPaths.baseline) ? await readFile(ariaPaths.baseline, 'utf8') : null;
-        const ariaOutcome = determineAriaOutcome(c.aria, reference, cfg.update);
-        await applyAriaOutcome(ariaOutcome, ariaPaths);
-        withAria(r, ariaResult(ariaOutcome, { o: cfg, paths: ariaPaths, reference }));
-      }
+      if (r.status === 'error' || c.aria !== undefined) seenAria.add(`${c.target}/${safeName(c.name)}`);
       results.push(r);
       opts.onProgress?.(r);
     },

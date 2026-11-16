@@ -1,5 +1,5 @@
 import { AxeBuilder } from '@axe-core/playwright';
-import { chromium, firefox, webkit, type Browser, type BrowserContext, type BrowserType, type Page } from 'playwright';
+import { chromium, firefox, webkit, type Browser, type BrowserContext, type BrowserType, type Locator, type Page } from 'playwright';
 import { normalizeAria } from './aria.js';
 import { pngCodec, type Codec, type Matcher } from './compare.js';
 import { HIDE_ATTR, IMPACTS, type A11yOptions, type PageSnap, type ResolvedConfig, type ResolvedTarget } from './config.js';
@@ -10,6 +10,22 @@ import { matchesAny } from './storybook.js';
 export { safeName };
 
 const ENGINES: Record<ResolvedTarget['browser'], BrowserType> = { chromium, firefox, webkit };
+
+/**
+ * A snapshot as capture sees it: a `pages`/Storybook entry, or a Playwright Test
+ * `pixelgate.screenshot()` call, which brings its own page, element and mask locators.
+ */
+export type CaptureSnap = Omit<PageSnap, 'url'> & {
+  url?: string;
+  /** The element to capture; wins over `selector`. */
+  locator?: Locator;
+  /** Painted over like `mask` selectors. */
+  maskLocators?: Locator[];
+};
+
+/** The element a snapshot captures (the first match), or undefined for the page. */
+export const rootOf = (page: Page, snap: CaptureSnap): Locator | undefined =>
+  snap.locator ?? (snap.selector ? page.locator(snap.selector).first() : undefined);
 
 /** Kill motion and caret blink so two renders of the same UI are byte-stable. */
 export const STABILIZE_CSS = `
@@ -101,16 +117,10 @@ const AXE_SCOPE_ATTR = 'data-pixelgate-axe-scope';
  * a `selector`. The screenshot takes the first match (`locator().first()`), so axe must
  * too: `include(selector)` would check every match, and accept no Playwright selectors.
  */
-export async function runAxe(page: Page, selector: string | undefined, opts: Required<A11yOptions>): Promise<A11yViolation[]> {
+export async function runAxe(page: Page, root: Locator | undefined, opts: Required<A11yOptions>): Promise<A11yViolation[]> {
   let axe = new AxeBuilder({ page }).withTags(opts.tags);
   if (opts.disableRules.length) axe = axe.disableRules(opts.disableRules);
-  const scoped = selector
-    ? await page
-        .locator(selector)
-        .first()
-        .evaluate((el, attr) => el.setAttribute(attr, ''), AXE_SCOPE_ATTR)
-        .then(() => true)
-    : false;
+  const scoped = root ? await root.evaluate((el, attr) => el.setAttribute(attr, ''), AXE_SCOPE_ATTR).then(() => true) : false;
   if (scoped) axe = axe.include(`[${AXE_SCOPE_ATTR}]`);
   let violations: Awaited<ReturnType<AxeBuilder['analyze']>>['violations'];
   try {
@@ -226,12 +236,21 @@ export function forcePseudoClasses(): string[] {
   return unreadable;
 }
 
-async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise<{ unreadableStylesheets: string[] }> {
+async function navigate(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise<void> {
   const { stabilize, timeoutMs } = cfg;
   if (stabilize.fixedTime) await page.clock.setFixedTime(new Date(stabilize.fixedTime));
   await page.goto(snap.url, { waitUntil: 'load', timeout: timeoutMs });
   // Best effort: apps with long-polling never go idle, so don't fail on it.
   await page.waitForLoadState('networkidle', { timeout: Math.min(5_000, timeoutMs) }).catch(() => {});
+}
+
+/**
+ * Brings a loaded page into a capturable state: motion frozen, `waitFor`/`beforeCapture`,
+ * forced pseudo-classes, fonts and images ready. Returns the stylesheets
+ * `applyPseudoClasses` could not read.
+ */
+export async function settle(page: Page, snap: CaptureSnap, cfg: ResolvedConfig): Promise<{ unreadableStylesheets: string[] }> {
+  const { stabilize, timeoutMs } = cfg;
   await page.addStyleTag({ content: STABILIZE_CSS + (stabilize.css ?? '') });
   if (snap.waitFor) await page.locator(snap.waitFor).first().waitFor({ state: 'visible', timeout: timeoutMs });
   if (snap.beforeCapture) await snap.beforeCapture(page);
@@ -258,7 +277,7 @@ async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise
 export const HIDE_CSS = `[${HIDE_ATTR}] { visibility: hidden !important; }`;
 
 /** Masked selectors for a snapshot: global, the snapshot's own, and hidden-but-ignored content. */
-export function maskSelectors(cfg: Pick<ResolvedConfig, 'mask'>, snap: PageSnap, target: Pick<ResolvedTarget, 'hideBehavior'>): string[] {
+export function maskSelectors(cfg: Pick<ResolvedConfig, 'mask'>, snap: Pick<PageSnap, 'mask'>, target: Pick<ResolvedTarget, 'hideBehavior'>): string[] {
   return [...cfg.mask, ...(snap.mask ?? []), ...(target.hideBehavior === 'ignore' ? [`[${HIDE_ATTR}]`] : [])];
 }
 
@@ -267,11 +286,12 @@ export function maskSelectors(cfg: Pick<ResolvedConfig, 'mask'>, snap: PageSnap,
  * the body. Hidden (`data-pixelgate-hide`) and masked elements are left out (`aria-hidden`),
  * since their content is what changes between runs. Runs last: it leaves those attributes.
  */
-export async function captureAria(page: Page, snap: PageSnap, cfg: ResolvedConfig, target: ResolvedTarget): Promise<string> {
-  for (const s of new Set([`[${HIDE_ATTR}]`, ...maskSelectors(cfg, snap, target)])) {
-    await page.locator(s).evaluateAll((els) => els.forEach((e) => e.setAttribute('aria-hidden', 'true')));
+export async function captureAria(page: Page, snap: CaptureSnap, cfg: ResolvedConfig, target: ResolvedTarget): Promise<string> {
+  const hidden = [...new Set([`[${HIDE_ATTR}]`, ...maskSelectors(cfg, snap, target)])].map((s) => page.locator(s));
+  for (const l of [...hidden, ...(snap.maskLocators ?? [])]) {
+    await l.evaluateAll((els) => els.forEach((e) => e.setAttribute('aria-hidden', 'true')));
   }
-  const root = snap.selector ? page.locator(snap.selector).first() : page.locator('body');
+  const root = rootOf(page, snap) ?? page.locator('body');
   // `ariaSnapshot` has no timeout by default.
   return normalizeAria(await root.ariaSnapshot({ timeout: cfg.timeoutMs }));
 }
@@ -369,7 +389,7 @@ export interface Shooter {
  * Within the caps and without grown crops this is the plain page/locator screenshot; otherwise
  * a clip of the full page, so crops can reach outside the element and pages stop at the cap.
  */
-function shooter(page: Page, snap: PageSnap, cfg: ResolvedConfig, target: ResolvedTarget, codec: Codec): Shooter {
+function shooter(page: Page, snap: CaptureSnap, cfg: ResolvedConfig, target: ResolvedTarget, codec: Codec): Shooter {
   const native = codec.screenshot;
   const masks = maskSelectors(cfg, snap, target);
   const opts = {
@@ -379,7 +399,7 @@ function shooter(page: Page, snap: PageSnap, cfg: ResolvedConfig, target: Resolv
     type: native?.type ?? 'png',
     ...(native?.type === 'jpeg' && native.quality !== undefined ? { quality: native.quality } : {}),
     ...(target.hideBehavior === 'hide' ? { style: HIDE_CSS } : {}),
-    ...(masks.length ? { mask: masks.map((s) => page.locator(s)) } : {}),
+    ...(masks.length || snap.maskLocators?.length ? { mask: [...masks.map((s) => page.locator(s)), ...(snap.maskLocators ?? [])] } : {}),
     ...(cfg.maskColor ? { maskColor: cfg.maskColor } : {}),
   };
   const maxWidth = snap.maxWidth ?? target.maxWidth;
@@ -390,8 +410,8 @@ function shooter(page: Page, snap: PageSnap, cfg: ResolvedConfig, target: Resolv
   const clipped = (clip: Box) => page.screenshot({ ...opts, fullPage: true, clip });
   const raw = async (): Promise<Buffer> => {
     s.capped = undefined;
-    if (snap.selector) {
-      const el = page.locator(snap.selector).first();
+    const el = rootOf(page, snap);
+    if (el) {
       if (!grow && !capping) return el.screenshot(opts);
       // Waits for the element like the screenshot call does, within the snapshot timeout.
       const { clip, capped } = capBox(await el.evaluate(elementBox, grow, { timeout: cfg.timeoutMs }), maxWidth, maxHeight);
@@ -459,6 +479,38 @@ async function newContext(browser: Browser, target: ResolvedTarget, allow: strin
   return { context, blocked };
 }
 
+/**
+ * The capture itself, on a page already in the state to capture: a stable screenshot
+ * (compared against `r.reference` first), then the checks and the ARIA snapshot of what
+ * was captured. Fills in `r`; throws on a capture error.
+ */
+export async function shoot(
+  page: Page,
+  snap: CaptureSnap,
+  cfg: ResolvedConfig,
+  target: ResolvedTarget,
+  matcher: Matcher,
+  r: CaptureResult,
+): Promise<void> {
+  const shooting = shooter(page, snap, cfg, target, matcher.codec);
+  r.shot = await stableShot(() => shooting.take(), r.reference, {
+    same: matcher.same,
+    timeoutMs: cfg.stabilize.stableTimeoutMs,
+    intervalMs: cfg.stabilize.stableIntervalMs,
+  });
+  if (shooting.capped) r.capped = shooting.capped;
+  // Checks run on the state that was captured, after the screenshot so they cannot change it.
+  if (target.checks.overflow) {
+    const px = await measureOverflow(page);
+    if (px > 0) r.overflowPx = px;
+  }
+  if (target.checks.a11y) {
+    const v = await runAxe(page, rootOf(page, snap), target.checks.a11y);
+    if (v.length) r.a11y = v;
+  }
+  if (snap.ariaSnapshot ?? target.ariaSnapshot) r.aria = await captureAria(page, snap, cfg, target);
+}
+
 export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], matcher: Matcher, hooks: CaptureHooks): Promise<void> {
   const allow = cfg.allowedHostnames && allowList(cfg.allowedHostnames, snaps);
   for (const target of cfg.targets) {
@@ -500,25 +552,10 @@ export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], matcher
         const reference = await hooks.reference(target.dir, snap.name);
         const r: CaptureResult = { target: target.dir, name: snap.name, reference, pageErrors };
         try {
-          const { unreadableStylesheets } = await prepare(page, snap, cfg);
+          await navigate(page, snap, cfg);
+          const { unreadableStylesheets } = await settle(page, snap, cfg);
           if (unreadableStylesheets.length) r.unreadableStylesheets = [...new Set(unreadableStylesheets)];
-          const shoot = shooter(page, snap, cfg, target, matcher.codec);
-          r.shot = await stableShot(() => shoot.take(), reference, {
-            same: matcher.same,
-            timeoutMs: cfg.stabilize.stableTimeoutMs,
-            intervalMs: cfg.stabilize.stableIntervalMs,
-          });
-          if (shoot.capped) r.capped = shoot.capped;
-          // Checks run on the state that was captured, after the screenshot so they cannot change it.
-          if (target.checks.overflow) {
-            const px = await measureOverflow(page);
-            if (px > 0) r.overflowPx = px;
-          }
-          if (target.checks.a11y) {
-            const v = await runAxe(page, snap.selector, target.checks.a11y);
-            if (v.length) r.a11y = v;
-          }
-          if (snap.ariaSnapshot ?? target.ariaSnapshot) r.aria = await captureAria(page, snap, cfg, target);
+          await shoot(page, snap, cfg, target, matcher, r);
         } catch (e) {
           r.error = e instanceof Error ? (e.message.split('\n')[0] ?? e.message) : String(e);
         } finally {
