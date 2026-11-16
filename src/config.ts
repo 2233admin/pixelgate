@@ -1,7 +1,9 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { registerHooks, stripTypeScriptTypes } from 'node:module';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { compileFunction } from 'node:vm';
 import { devices, type Page } from 'playwright';
 import { CODECS, COMPARATORS, type Codec, type Comparator } from './compare.js';
 
@@ -523,9 +525,78 @@ export async function loadConfig(cwd: string, explicit?: string, overrides: Conf
   if (file.endsWith('.json')) {
     raw = JSON.parse(await readFile(file, 'utf8')) as Config;
   } else {
-    const mod = (await import(pathToFileURL(file).href)) as { default?: Config };
+    const mod = await importConfig(file);
     if (!mod.default) throw new Error(`${file} must have a default export`);
     raw = mod.default;
   }
   return resolveConfig(raw, path.dirname(file), overrides);
+}
+
+/** What V8 says when it compiles ES module syntax as CommonJS. */
+const ESM_ONLY = [
+  'Cannot use import statement outside a module',
+  "Unexpected token 'export'",
+  "Cannot use 'import.meta' outside a module",
+  'await is only valid in async functions and the top level bodies of modules',
+];
+/** An ES module may declare what the CommonJS wrapper passes in (`const __dirname = ...`). */
+const WRAPPER_REDECLARED = /^Identifier '(?:exports|require|module|__filename|__dirname)' has already been declared$/;
+
+/** `stripTypeScriptTypes` without its ExperimentalWarning: Node strips the same way when it loads the file. */
+function stripTypes(source: string): string {
+  const emit = process.emitWarning;
+  process.emitWarning = ((warning: string | Error, ...rest: unknown[]) => {
+    if (String(warning).includes('stripTypeScriptTypes')) return;
+    (emit as (...a: unknown[]) => void).call(process, warning, ...rest);
+  }) as typeof process.emitWarning;
+  try {
+    return stripTypeScriptTypes(source);
+  } finally {
+    process.emitWarning = emit;
+  }
+}
+
+/**
+ * Whether a file is an ES module, the way Node detects it in a package without `type`: it
+ * fails to compile as CommonJS only because of ES module syntax. Type-only imports, and
+ * module syntax in comments or strings, leave a CommonJS file CommonJS.
+ */
+function isEsm(source: string, ts: boolean): boolean {
+  try {
+    compileFunction(ts ? stripTypes(source) : source, ['exports', 'require', 'module', '__filename', '__dirname']);
+    return false;
+  } catch (e) {
+    // Other errors, such as TypeScript Node cannot strip, are Node's to report.
+    if (!(e instanceof Error) || e.name !== 'SyntaxError') return false;
+    return ESM_ONLY.some((m) => e.message.includes(m)) || WRAPPER_REDECLARED.test(e.message);
+  }
+}
+
+/**
+ * Import a config file. Node takes the module format of `.ts` / `.js` files from the nearest
+ * package.json, so in a `"type": "commonjs"` package (`npm init -y` writes one) an ES module
+ * config, and the project files it imports, would load as CommonJS and fail. While importing,
+ * a load hook loads such a file as an ES module when it has ES module syntax, as Node does
+ * in a package without `type`. Dependencies (`node_modules`) keep Node's rules, and so do
+ * files imported later, from callbacks such as `beforeCapture`: the hook is gone by then.
+ */
+async function importConfig(file: string): Promise<{ default?: Config }> {
+  const hooks = registerHooks({
+    load(url, context, nextLoad) {
+      const loaded = nextLoad(url, context);
+      if (loaded.format !== 'commonjs' && loaded.format !== 'commonjs-typescript') return loaded;
+      if (!url.startsWith('file:') || url.includes('/node_modules/')) return loaded;
+      const filePath = fileURLToPath(url);
+      if (!/\.[jt]s$/.test(filePath)) return loaded;
+      const source = readFileSync(filePath, 'utf8');
+      const ts = filePath.endsWith('.ts');
+      if (!isEsm(source, ts)) return loaded;
+      return { format: ts ? 'module-typescript' : 'module', source, shortCircuit: true };
+    },
+  });
+  try {
+    return (await import(pathToFileURL(file).href)) as { default?: Config };
+  } finally {
+    hooks.deregister();
+  }
 }
