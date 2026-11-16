@@ -653,6 +653,20 @@ pnpm deps:latest     # move everything to latest
 Dependency policy: always on the latest release of every dependency. Dependabot
 opens the bumps weekly; `deps:check` must be clean before a release.
 
+### Releasing
+
+Releases go out through [`.github/workflows/release.yml`](.github/workflows/release.yml)
+with npm trusted publishing: no npm token is stored anywhere.
+
+1. Bump `version` in `package.json` on `main` (a normal PR). Pre-release versions
+   (`1.2.0-rc.1`) are not supported yet.
+2. Tag that commit of `main` `v<version>` and push the tag.
+3. The workflow checks the tag against `package.json` and `main`, runs typecheck and tests,
+   stages the version on npm (`npm stage publish`, with provenance) and drafts the GitHub
+   release.
+4. A maintainer approves the staged version on npmjs.com (or `npm stage approve <id>`), which
+   asks for their 2FA. Only then is it installable. Then publish the draft release.
+
 ## Roadmap
 
 Happo parity status and the next slices: [docs/happo-parity.md](docs/happo-parity.md).

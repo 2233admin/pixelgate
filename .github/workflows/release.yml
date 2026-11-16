@@ -1,0 +1,113 @@
+name: release
+
+# Publish to npm with trusted publishing (OIDC): no npm token is stored anywhere.
+# Push a tag `v<version>` matching package.json on a commit of main; this workflow tests that
+# commit, stages the version on npm and drafts the GitHub release. A maintainer then approves
+# the staged version on npmjs.com (or `npm stage approve <id>`), which needs their 2FA (OIDC
+# can stage but never approve), and publishes the draft release. See "Releasing" in README.md.
+#
+# npm's trusted-publisher config names this file (`release.yml`) and the `npm` environment:
+# rename either one and publishing fails until the config is recreated on npmjs.com.
+on:
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    # No write token next to the dev dependencies' code: this job can only stage on npm.
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing (OIDC) and provenance
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the main-ancestry check below
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          package-manager-cache: false
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12
+
+      - name: Check tag, version and npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="$(node -p "require('./package.json').version")"
+          if [ "${tag}" != "v${version}" ]; then
+            echo "::error::tag ${tag} does not match package.json version ${version}"
+            exit 1
+          fi
+          # A pre-release would land on the `latest` dist-tag.
+          case "${version}" in
+            *-*) echo "::error::pre-release ${version}: not supported by this workflow"; exit 1 ;;
+          esac
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "::error::${tag} is not on main"
+            exit 1
+          fi
+          # Trusted publishing needs npm 11.5.1 or later.
+          npm --version
+          node -e "
+            const [a, b, c] = process.argv[1].split('.').map(Number);
+            if (a < 11 || (a === 11 && (b < 5 || (b === 5 && c < 1)))) {
+              console.error('::error::npm ' + process.argv[1] + ' is older than 11.5.1');
+              process.exit(1);
+            }
+          " "$(npm --version)"
+          if npm view "pixelgate-cli@${version}" version >/dev/null 2>&1; then
+            echo "::error::pixelgate-cli@${version} is already on npm"
+            exit 1
+          fi
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm exec playwright install --with-deps chromium-headless-shell
+
+      - run: pnpm typecheck
+
+      # A tag can point at a commit CI never ran on.
+      - run: pnpm test
+        env:
+          PIXELGATE_TEST_TMP: ${{ runner.temp }}
+
+      # What goes into the tarball, in the log.
+      - run: npm pack --dry-run
+
+      - name: Stage on npm
+        run: npm stage publish
+
+  release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the draft release
+    steps:
+      # A draft, so nothing public points at a version that is never approved on npm.
+      - name: Draft GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          {
+            echo "npm: [\`pixelgate-cli@${version}\`](https://www.npmjs.com/package/pixelgate-cli/v/${version})"
+            echo
+          } > "${RUNNER_TEMP}/notes.md"
+          gh release create "${GITHUB_REF_NAME}" --draft --verify-tag --generate-notes \
+            --notes-file "${RUNNER_TEMP}/notes.md"
