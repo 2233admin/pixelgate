@@ -34,7 +34,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await writeFile(theme, original);
   await rm(outDir, { recursive: true, force: true });
-  await rm(path.join(app, '.vitest-attachments'), { recursive: true, force: true });
+  await rm(path.join(app, '.vitest'), { recursive: true, force: true });
 });
 
 describe('vitest adapter', () => {

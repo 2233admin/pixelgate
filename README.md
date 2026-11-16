@@ -168,6 +168,9 @@ test('primary button', async () => {
   `pixelgate approve` (no pixelgate config needed; `--out-dir` if you moved it),
   or `vitest -u` to accept everything.
 
+Vitest also copies failure images into its own attachments directory
+(`.vitest/` by default); git-ignore it next to the `.pixelgate/` entries.
+
 Comparison, retries and thresholds stay Vitest's (`comparatorName`,
 `comparatorOptions` in the same `toMatchScreenshot` block).
 
