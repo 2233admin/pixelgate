@@ -39,6 +39,11 @@ function percent(ratio: number): string {
 }
 
 function detail(r: SnapshotResult): string {
+  const base = statusDetail(r);
+  return r.capped ? `${base}${base ? '; ' : ''}cut at the size cap (full ${r.capped.width}x${r.capped.height}px)` : base;
+}
+
+function statusDetail(r: SnapshotResult): string {
   switch (r.status) {
     case 'changed': {
       const parts: string[] = [];

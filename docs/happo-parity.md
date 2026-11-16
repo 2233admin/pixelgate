@@ -13,7 +13,10 @@ out of scope for a self-hosted tool). Updated with each parity slice.
    page errors; result fields plus opt-in `failOn` conditions, which `approve` does not clear.
 3. **ARIA snapshots** (done): `ariaSnapshot`, `<name>.aria.yml` baselines next to the
    screenshots, exact text compare, unified diff, approved and pruned with the screenshot.
-4. Playwright Test fixture, `maxHeight`, outline/shadow-aware element crops, pseudo-class forcing.
+4. **Capture options** (4a, done): `maxHeight`/`maxWidth` (default 5000px tall),
+   `includeOutlinesAndShadows`, `applyPseudoClasses`.
+   **Playwright Test fixture** (4b, next): `pixelgate/playwright` running pixelgate's own
+   pipeline on the test's page, results gathered by a Playwright reporter.
 Status: HAVE / PARTIAL / GAP / N/A (SaaS-only, out of scope for a self-hosted tool).
 
 ## Rendering determinism
@@ -35,9 +38,9 @@ Status: HAVE / PARTIAL / GAP / N/A (SaaS-only, out of scope for a self-hosted to
 
 | Happo | | pixelgate | Status |
 | --- | --- | --- | --- |
-| `applyPseudoClasses` | `data-happo-hover/focus/focus-visible/active` attributes force `:hover` etc. | only one element at a time via `beforeCapture` (`locator.hover()`) | GAP (CDP `CSS.forcePseudoState`, chromium only) |
-| `includeOutlinesAndShadows` | grow element crops to include focus rings / box-shadows | `locator.screenshot()` crops to the border box | GAP |
-| `maxHeight` / `maxWidth` | cap tall full-page shots (default 5000px) | uncapped | GAP |
+| `applyPseudoClasses` | `data-happo-hover/focus/focus-visible/active` attributes force `:hover` etc. | `applyPseudoClasses` + `data-pixelgate-hover/focus/focus-visible/active`: copies of the readable CSS rules (all engines, also `@media`/`@layer`/nesting/shadow roots); unreadable cross-origin sheets reported | HAVE |
+| `includeOutlinesAndShadows` | grow element crops to include focus rings / box-shadows | `includeOutlinesAndShadows` (global, Storybook source, page): outlines and outer box-shadows of the element and its descendants | HAVE (no `filter: drop-shadow`) |
+| `maxHeight` / `maxWidth` | cap tall full-page shots (default 5000px) | `maxHeight` (default 5000) / `maxWidth` (global, target, page), also element crops; full size reported as `capped` | HAVE |
 | animated snapshots | capture animations as frame sequences (CSS, WAAPI, SMIL, rAF, video) | none | GAP (large) |
 | browsers chrome/firefox/edge/safari/ios-safari/ipad-safari | | chromium/firefox/webkit + `deviceScaleFactor` | HAVE (target `device`: Playwright's device list) |
 | `screenshotScale` | 1x/2x for iOS targets | `deviceScaleFactor` | HAVE |

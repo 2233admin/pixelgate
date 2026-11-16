@@ -79,6 +79,10 @@ export interface CaptureResult {
   overflowPx?: number;
   /** Normalised ARIA snapshot, when `ariaSnapshot` is on for this snapshot. */
   aria?: string;
+  /** Full size of a screenshot that `maxHeight`/`maxWidth` cut off. */
+  capped?: { width: number; height: number };
+  /** Stylesheets `applyPseudoClasses` could not read (other origins), so their rules were not forced. */
+  unreadableStylesheets?: string[];
 }
 
 /** How far the page reaches past the right edge of the viewport, in CSS pixels (0 = fits). */
@@ -160,7 +164,66 @@ export function isAllowed(url: string, allow: string[]): boolean {
   return matchesAny(bareHost(u.hostname), allow);
 }
 
-async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise<void> {
+/** The pseudo-classes `applyPseudoClasses` forces, each through a `data-pixelgate-<name>` attribute. */
+export const PSEUDO_CLASSES = ['hover', 'focus', 'focus-visible', 'active'] as const;
+
+/**
+ * Runs in the page (self-contained). Inserts, right after every readable CSS rule whose
+ * selector uses `:hover`, `:focus`, `:focus-visible` or `:active`, a copy keyed on the
+ * `data-pixelgate-*` attribute instead, so marked elements show that state. Walks
+ * `@media`/`@supports`/`@layer`/nesting, `@import`, adopted sheets and open shadow roots.
+ * Returns the stylesheets it could not read.
+ */
+export function forcePseudoClasses(): string[] {
+  const has = /:(hover|focus-visible|focus|active)(?![\w-])/;
+  const all = /:(hover|focus-visible|focus|active)(?![\w-])/g;
+  const unreadable: string[] = [];
+  const done = new Set<CSSStyleSheet>();
+  type Parent = { cssRules: CSSRuleList; insertRule(rule: string, index?: number): number };
+  const walk = (parent: Parent) => {
+    const list = parent.cssRules;
+    for (let i = 0; i < list.length; i++) {
+      const rule = list[i]!;
+      if (rule instanceof CSSImportRule) {
+        if (rule.styleSheet) sheet(rule.styleSheet);
+        continue;
+      }
+      if (rule instanceof CSSStyleRule && has.test(rule.selectorText)) {
+        const from = rule.selectorText;
+        const to = from.replace(all, (_m, p: string) => `[data-pixelgate-${p}]`);
+        const text = rule.cssText.startsWith(from) ? to + rule.cssText.slice(from.length) : `${to} { ${rule.style.cssText} }`;
+        try {
+          parent.insertRule(text, i + 1);
+          i++;
+        } catch {
+          // A selector this context will not take: that state stays unforced.
+        }
+      }
+      const inner = rule as unknown as Partial<Parent>;
+      if (inner.cssRules && typeof inner.insertRule === 'function') walk(inner as Parent);
+    }
+  };
+  const sheet = (s: CSSStyleSheet) => {
+    if (done.has(s)) return;
+    done.add(s);
+    try {
+      void s.cssRules;
+    } catch {
+      unreadable.push(s.href ?? '(inline)');
+      return;
+    }
+    walk(s);
+  };
+  const root = (r: Document | ShadowRoot) => {
+    for (const s of Array.from(r.styleSheets)) sheet(s);
+    for (const s of r.adoptedStyleSheets ?? []) sheet(s);
+    for (const el of Array.from(r.querySelectorAll('*'))) if (el.shadowRoot) root(el.shadowRoot);
+  };
+  root(document);
+  return unreadable;
+}
+
+async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise<{ unreadableStylesheets: string[] }> {
   const { stabilize, timeoutMs } = cfg;
   if (stabilize.fixedTime) await page.clock.setFixedTime(new Date(stabilize.fixedTime));
   await page.goto(snap.url, { waitUntil: 'load', timeout: timeoutMs });
@@ -169,6 +232,14 @@ async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise
   await page.addStyleTag({ content: STABILIZE_CSS + (stabilize.css ?? '') });
   if (snap.waitFor) await page.locator(snap.waitFor).first().waitFor({ state: 'visible', timeout: timeoutMs });
   if (snap.beforeCapture) await snap.beforeCapture(page);
+  // Before fonts and images settle: the forced rules may load some.
+  const unreadableStylesheets: string[] = [];
+  if (cfg.applyPseudoClasses) {
+    for (const frame of page.frames()) {
+      // A frame that navigates or detaches meanwhile has nothing to force.
+      unreadableStylesheets.push(...(await frame.evaluate(forcePseudoClasses).catch(() => [])));
+    }
+  }
   await page.evaluate(async () => {
     await document.fonts.ready;
     // Let images already in the DOM finish decoding.
@@ -177,6 +248,7 @@ async function prepare(page: Page, snap: PageSnap, cfg: ResolvedConfig): Promise
     );
   });
   if (stabilize.waitMs) await page.waitForTimeout(stabilize.waitMs);
+  return { unreadableStylesheets };
 }
 
 /** CSS applied only while a screenshot is taken; pierces shadow DOM and frames. */
@@ -201,8 +273,94 @@ export async function captureAria(page: Page, snap: PageSnap, cfg: ResolvedConfi
   return normalizeAria(await root.ariaSnapshot({ timeout: cfg.timeoutMs }));
 }
 
-/** Screenshots in the codec's format: natively when Playwright supports it, else PNG re-encoded. */
-function shooter(page: Page, snap: PageSnap, cfg: ResolvedConfig, target: ResolvedTarget, codec: Codec): () => Promise<Buffer> {
+export interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Runs in the page (self-contained). The element's box in page coordinates, grown (when
+ * `grow`) by the outlines and box-shadows of the element and its descendants, rounded
+ * outward and kept inside the document.
+ */
+export function elementBox(el: Element, grow: boolean): Box {
+  let { left, top, right, bottom } = el.getBoundingClientRect();
+  if (grow) {
+    const px = (s: string) => (s.match(/-?[\d.]+px/g) ?? []).map(parseFloat);
+    const add = (e: Element) => {
+      const cs = getComputedStyle(e);
+      let l = 0;
+      let t = 0;
+      let r = 0;
+      let b = 0;
+      if (cs.outlineStyle !== 'none') {
+        const w = parseFloat(cs.outlineWidth) || 0;
+        l = t = r = b = (cs.outlineStyle === 'auto' ? Math.max(3, w) : w) + Math.max(0, parseFloat(cs.outlineOffset) || 0);
+      }
+      if (cs.boxShadow && cs.boxShadow !== 'none') {
+        // Commas inside rgb()/rgba() do not separate shadows.
+        for (const shadow of cs.boxShadow.split(/,(?![^(]*\))/)) {
+          if (/\binset\b/.test(shadow)) continue;
+          const [x = 0, y = 0, blur = 0, spread = 0] = px(shadow);
+          const reach = spread + blur;
+          l = Math.max(l, reach - x);
+          r = Math.max(r, reach + x);
+          t = Math.max(t, reach - y);
+          b = Math.max(b, reach + y);
+        }
+      }
+      if (!(l || t || r || b)) return;
+      const box = e.getBoundingClientRect();
+      if (!box.width && !box.height) return;
+      left = Math.min(left, box.left - l);
+      top = Math.min(top, box.top - t);
+      right = Math.max(right, box.right + r);
+      bottom = Math.max(bottom, box.bottom + b);
+    };
+    add(el);
+    for (const d of Array.from(el.querySelectorAll('*'))) add(d);
+  }
+  const doc = document.documentElement;
+  const width = Math.max(doc.scrollWidth, document.body ? document.body.scrollWidth : 0);
+  const height = Math.max(doc.scrollHeight, document.body ? document.body.scrollHeight : 0);
+  const x0 = Math.max(0, Math.floor(left + scrollX));
+  const y0 = Math.max(0, Math.floor(top + scrollY));
+  const x1 = Math.min(width, Math.ceil(right + scrollX));
+  const y1 = Math.min(height, Math.ceil(bottom + scrollY));
+  return { x: x0, y: y0, width: Math.max(1, x1 - x0), height: Math.max(1, y1 - y0) };
+}
+
+/** Runs in the page. Size of the whole scrollable page. */
+function pageSize(): { width: number; height: number } {
+  const doc = document.documentElement;
+  return {
+    width: Math.max(doc.scrollWidth, document.body ? document.body.scrollWidth : 0),
+    height: Math.max(doc.scrollHeight, document.body ? document.body.scrollHeight : 0),
+  };
+}
+
+/** `box` cut to the caps (0 = none); `capped` is the full size when it was cut. */
+export function capBox(box: Box, maxWidth: number, maxHeight: number): { clip: Box; capped?: { width: number; height: number } } {
+  const width = maxWidth > 0 ? Math.min(box.width, maxWidth) : box.width;
+  const height = maxHeight > 0 ? Math.min(box.height, maxHeight) : box.height;
+  const clip = { ...box, width, height };
+  return width < box.width || height < box.height ? { clip, capped: { width: box.width, height: box.height } } : { clip };
+}
+
+export interface Shooter {
+  take(): Promise<Buffer>;
+  /** Set by the last `take()` when the caps cut the screenshot. */
+  capped?: { width: number; height: number };
+}
+
+/**
+ * Screenshots in the codec's format: natively when Playwright supports it, else PNG re-encoded.
+ * Within the caps and without grown crops this is the plain page/locator screenshot; otherwise
+ * a clip of the full page, so crops can reach outside the element and pages stop at the cap.
+ */
+function shooter(page: Page, snap: PageSnap, cfg: ResolvedConfig, target: ResolvedTarget, codec: Codec): Shooter {
   const native = codec.screenshot;
   const masks = maskSelectors(cfg, snap, target);
   const opts = {
@@ -215,10 +373,29 @@ function shooter(page: Page, snap: PageSnap, cfg: ResolvedConfig, target: Resolv
     ...(masks.length ? { mask: masks.map((s) => page.locator(s)) } : {}),
     ...(cfg.maskColor ? { maskColor: cfg.maskColor } : {}),
   };
-  const raw = snap.selector
-    ? () => page.locator(snap.selector!).first().screenshot(opts)
-    : () => page.screenshot({ ...opts, fullPage: snap.fullPage ?? true });
-  return native ? raw : async () => codec.encode(pngCodec.decode(await raw()));
+  const maxWidth = snap.maxWidth ?? target.maxWidth;
+  const maxHeight = snap.maxHeight ?? target.maxHeight;
+  const capping = maxWidth > 0 || maxHeight > 0;
+  const grow = snap.includeOutlinesAndShadows ?? cfg.includeOutlinesAndShadows;
+  const s: Shooter = { take: async () => Buffer.alloc(0) };
+  const clipped = (clip: Box) => page.screenshot({ ...opts, fullPage: true, clip });
+  const raw = async (): Promise<Buffer> => {
+    s.capped = undefined;
+    if (snap.selector) {
+      const el = page.locator(snap.selector).first();
+      if (!grow && !capping) return el.screenshot(opts);
+      const { clip, capped } = capBox(await el.evaluate(elementBox, grow), maxWidth, maxHeight);
+      s.capped = capped;
+      return grow || capped ? clipped(clip) : el.screenshot(opts);
+    }
+    const fullPage = snap.fullPage ?? true;
+    if (!fullPage || !capping) return page.screenshot({ ...opts, fullPage });
+    const { clip, capped } = capBox({ x: 0, y: 0, ...(await page.evaluate(pageSize)) }, maxWidth, maxHeight);
+    s.capped = capped;
+    return capped ? clipped(clip) : page.screenshot({ ...opts, fullPage: true });
+  };
+  s.take = native ? raw : async () => codec.encode(pngCodec.decode(await raw()));
+  return s;
 }
 
 async function pool<T>(items: T[], size: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -313,12 +490,15 @@ export async function captureAll(cfg: ResolvedConfig, snaps: PageSnap[], matcher
         const reference = await hooks.reference(target.dir, snap.name);
         const r: CaptureResult = { target: target.dir, name: snap.name, reference, pageErrors };
         try {
-          await prepare(page, snap, cfg);
-          r.shot = await stableShot(shooter(page, snap, cfg, target, matcher.codec), reference, {
+          const { unreadableStylesheets } = await prepare(page, snap, cfg);
+          if (unreadableStylesheets.length) r.unreadableStylesheets = [...new Set(unreadableStylesheets)];
+          const shoot = shooter(page, snap, cfg, target, matcher.codec);
+          r.shot = await stableShot(() => shoot.take(), reference, {
             same: matcher.same,
             timeoutMs: cfg.stabilize.stableTimeoutMs,
             intervalMs: cfg.stabilize.stableIntervalMs,
           });
+          if (shoot.capped) r.capped = shoot.capped;
           // Checks run on the state that was captured, after the screenshot so they cannot change it.
           if (target.checks.overflow) {
             const px = await measureOverflow(page);

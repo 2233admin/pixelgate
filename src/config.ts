@@ -83,6 +83,10 @@ export interface Target {
   checks?: Checks;
   /** Overrides the top-level `ariaSnapshot` for this target. */
   ariaSnapshot?: boolean;
+  /** Overrides the top-level `maxHeight` for this target. */
+  maxHeight?: number;
+  /** Overrides the top-level `maxWidth` for this target. */
+  maxWidth?: number;
 }
 
 export interface PageSnap {
@@ -105,6 +109,12 @@ export interface PageSnap {
   mask?: string[];
   /** Overrides the target's `ariaSnapshot` for this snapshot. */
   ariaSnapshot?: boolean;
+  /** Overrides the target's `maxHeight` for this snapshot. */
+  maxHeight?: number;
+  /** Overrides the target's `maxWidth` for this snapshot. */
+  maxWidth?: number;
+  /** Overrides the top-level `includeOutlinesAndShadows` for this snapshot. */
+  includeOutlinesAndShadows?: boolean;
 }
 
 export interface StorybookSource {
@@ -119,6 +129,8 @@ export interface StorybookSource {
   mask?: string[];
   /** Overrides the target's `ariaSnapshot` for every story. */
   ariaSnapshot?: boolean;
+  /** Overrides the top-level `includeOutlinesAndShadows` for every story. */
+  includeOutlinesAndShadows?: boolean;
 }
 
 export interface ViteSource {
@@ -206,6 +218,27 @@ export interface Config {
    */
   ariaSnapshot?: boolean;
   /**
+   * Tallest screenshot, in CSS pixels: a longer page (or element) is cut off at this height
+   * and the result says how tall it was (`capped`). Default 5000, like Happo. `0` = no cap.
+   * Targets and pages can override.
+   */
+  maxHeight?: number;
+  /** Widest screenshot, in CSS pixels, like `maxHeight`. Default `0` (no cap). */
+  maxWidth?: number;
+  /**
+   * Grow `selector` crops to include the outlines (focus rings) and box-shadows of the
+   * element and its descendants, which a crop to the border box cuts off. Default false.
+   * Storybook sources and pages can override.
+   */
+  includeOutlinesAndShadows?: boolean;
+  /**
+   * Force `:hover`, `:focus`, `:focus-visible` and `:active` styles on elements marked
+   * `data-pixelgate-hover` (`-focus`, `-focus-visible`, `-active`), so several elements can
+   * show those states in one screenshot. Works by copying the page's CSS rules; rules in
+   * stylesheets the page cannot read (other origins) are reported, not forced. Default false.
+   */
+  applyPseudoClasses?: boolean;
+  /**
    * Selectors painted over with a solid box in every snapshot (dynamic content you
    * cannot mark with `data-pixelgate-hide`, e.g. third-party widgets).
    */
@@ -254,6 +287,9 @@ export interface ResolvedTarget {
   checks: ResolvedChecks;
   /** Default for this target's snapshots; a page or Storybook source can override it. */
   ariaSnapshot: boolean;
+  /** CSS px; 0 = no cap. A page can override. */
+  maxHeight: number;
+  maxWidth: number;
 }
 
 export interface ResolvedConfig {
@@ -270,6 +306,8 @@ export interface ResolvedConfig {
   codec: Codec;
   concurrency: number;
   timeoutMs: number;
+  includeOutlinesAndShadows: boolean;
+  applyPseudoClasses: boolean;
   stabilize: Stabilize & { stableTimeoutMs: number; stableIntervalMs: number };
   mask: string[];
   maskColor?: string;
@@ -328,6 +366,15 @@ export function resolveChecks(where: string, global: Checks | undefined, own: Ch
   return out;
 }
 
+/** Happo's default cap for full-page screenshots. */
+export const DEFAULT_MAX_HEIGHT = 5000;
+
+/** A screenshot size cap: a whole number of CSS pixels, 0 for none. */
+function size(what: string, v: number): number {
+  if (!Number.isInteger(v) || v < 0) throw new Error(`${what} must be a whole number of pixels, 0 for no cap`);
+  return v;
+}
+
 function resolveTarget(
   name: string,
   t: Target,
@@ -335,6 +382,7 @@ function resolveTarget(
   defaultHide: HideBehavior,
   checks: Checks | undefined,
   defaultAria = false,
+  defaultMax: { maxHeight: number; maxWidth: number } = { maxHeight: DEFAULT_MAX_HEIGHT, maxWidth: 0 },
 ): ResolvedTarget {
   const dev = t.device === undefined ? undefined : devices[t.device];
   if (t.device !== undefined && !dev) {
@@ -368,6 +416,8 @@ function resolveTarget(
     hideBehavior,
     checks: resolveChecks(`Target "${name}"`, checks, t.checks),
     ariaSnapshot: t.ariaSnapshot ?? defaultAria,
+    maxHeight: size(`Target "${name}": \`maxHeight\``, t.maxHeight ?? defaultMax.maxHeight),
+    maxWidth: size(`Target "${name}": \`maxWidth\``, t.maxWidth ?? defaultMax.maxWidth),
   };
 }
 
@@ -379,7 +429,11 @@ export function resolveConfig(config: Config, rootDir: string, overrides: Config
   const targetEntries = Object.entries(config.targets ?? { chromium: {} });
   if (targetEntries.length === 0) throw new Error('Config must define at least one target');
   const hideBehavior = config.hideBehavior ?? 'hide';
-  const targets = targetEntries.map(([name, t]) => resolveTarget(name, t, platformSpecific, hideBehavior, config.checks, config.ariaSnapshot));
+  const targets = targetEntries.map(([name, t]) => resolveTarget(name, t, platformSpecific, hideBehavior, config.checks, config.ariaSnapshot, {
+      maxHeight: size('`maxHeight`', config.maxHeight ?? DEFAULT_MAX_HEIGHT),
+      maxWidth: size('`maxWidth`', config.maxWidth ?? 0),
+    }),
+  );
   const failOn = config.failOn ?? (update === 'none' ? ['changed', 'error', 'added'] : ['changed', 'error']);
   for (const f of failOn) {
     if (!(STATUSES as string[]).includes(f) && !(CHECKS as string[]).includes(f)) {
@@ -392,6 +446,8 @@ export function resolveConfig(config: Config, rootDir: string, overrides: Config
     if (!p.name || !p.url) throw new Error('Every page needs `name` and `url`');
     if (seen.has(p.name)) throw new Error(`Duplicate page name "${p.name}"`);
     seen.add(p.name);
+    if (p.maxHeight !== undefined) size(`Page "${p.name}": \`maxHeight\``, p.maxHeight);
+    if (p.maxWidth !== undefined) size(`Page "${p.name}": \`maxWidth\``, p.maxWidth);
   }
   if (pages.length === 0 && !config.storybook) {
     throw new Error('Config must define `pages` or `storybook`');
@@ -436,6 +492,8 @@ export function resolveConfig(config: Config, rootDir: string, overrides: Config
     codec,
     concurrency: Math.max(1, config.concurrency ?? 4),
     timeoutMs: config.timeoutMs ?? 30_000,
+    includeOutlinesAndShadows: config.includeOutlinesAndShadows ?? false,
+    applyPseudoClasses: config.applyPseudoClasses ?? false,
     stabilize: {
       ...config.stabilize,
       stableTimeoutMs: config.stabilize?.stableTimeoutMs ?? 5_000,

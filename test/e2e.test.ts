@@ -5,7 +5,9 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { chromium } from 'playwright';
 import { afterAll, beforeAll, describe, it } from 'vitest';
+import { elementBox, forcePseudoClasses } from '../src/capture.js';
 import { pngCodec } from '../src/compare.js';
 import { resolveConfig, type Config, type ResolvedConfig, type UpdateMode } from '../src/config.js';
 import { approve } from '../src/report.js';
@@ -89,6 +91,13 @@ beforeAll(async () => {
       '/dynamic-plain': () => dynamic(''),
       '/dark': () => dark,
       '/aria': ariaPage,
+      '/tall': () => `<!doctype html><body style="margin:0"><div style="height:1000px;background:linear-gradient(#f00,#00f)"></div></body>`,
+      '/shadow': () => `<!doctype html><body style="margin:0;background:#fff">
+<div id="card" style="margin:40px;width:100px;height:40px;background:#eee;box-shadow:0 4px 12px 2px rgba(0,0,0,.5)"></div></body>`,
+      '/pseudo': () => `<!doctype html><html><head><link rel="stylesheet" href="http://localhost:${port}/ext.css"><style>
+@media (min-width: 1px) { button:hover { background: rgb(255, 0, 0); } }
+button { background: rgb(0, 0, 255); border: 0; width: 60px; height: 30px; margin: 0; display: block; }
+</style></head><body style="margin:0;padding-top:50px"><button data-pixelgate-hover>a</button><button>b</button></body></html>`,
       '/a11y': () => `<!doctype html><html lang="en"><body style="margin:0">
 <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="40" height="40"><div id="ok"><button>Ok</button></div></body></html>`,
       '/cards': () => `<!doctype html><html lang="en"><body style="margin:0">
@@ -462,6 +471,110 @@ describe('ARIA snapshots', () => {
     assert.equal(existsSync(ariaFile('.pg-aria-late')), false, 'CI mode writes no baseline');
     await approve(at('.pg-aria-late', 'none'));
     assert.equal((await run(at('.pg-aria-late', 'none'))).failed, false);
+  });
+});
+
+describe('capture options: maxHeight, includeOutlinesAndShadows, applyPseudoClasses', () => {
+  const at = (outDir: string, page: NonNullable<Config['pages']>[number], extra: Partial<Config> = {}) =>
+    cfgWith({ outDir, targets: { desktop: { viewport: '400x200' } }, pages: [page], ...extra });
+  const png = async (outDir: string, name: string) =>
+    pngCodec.decode(await readFile(path.join(tmp, outDir, 'baseline', `desktop-${platform}`, `${name}.png`)));
+  const rgb = (img: { data: Uint8Array; width: number }, x: number, y: number) =>
+    Array.from(img.data.subarray((y * img.width + x) * 4, (y * img.width + x) * 4 + 3));
+
+  it('maxHeight cuts a tall full page and reports its full size; under the cap nothing changes', async () => {
+    const cut = await run(at('.pg-cap', { name: 't', url: `${origin}/tall`, maxHeight: 300 }));
+    assert.deepEqual(cut.results[0]!.capped, { width: 400, height: 1000 }, JSON.stringify(cut.results[0]));
+    const img = await png('.pg-cap', 't');
+    assert.deepEqual([img.width, img.height], [400, 300]);
+
+    const whole = await run(at('.pg-cap-default', { name: 't', url: `${origin}/tall` }));
+    assert.equal(whole.results[0]!.capped, undefined, 'the default 5000px cap does not touch a 1000px page');
+    assert.equal((await png('.pg-cap-default', 't')).height, 1000);
+  });
+
+  it('includeOutlinesAndShadows grows a selector crop by the box-shadow', async () => {
+    const page = { name: 'card', url: `${origin}/shadow`, selector: '#card' };
+    await run(at('.pg-crop', page));
+    const plain = await png('.pg-crop', 'card');
+    assert.deepEqual([plain.width, plain.height], [100, 40]);
+    await run(at('.pg-crop-grown', { ...page, includeOutlinesAndShadows: true }));
+    const grown = await png('.pg-crop-grown', 'card');
+    // 0 4px 12px 2px: reach 14px, shifted 4px down: 14 + 100 + 14 wide, 10 + 40 + 18 tall.
+    assert.deepEqual([grown.width, grown.height], [128, 68]);
+  });
+
+  it('applyPseudoClasses forces :hover on the marked element only, and reports unreadable stylesheets', async () => {
+    const page = { name: 'p', url: `${origin}/pseudo` };
+    await run(at('.pg-pseudo-off', page));
+    const off = await png('.pg-pseudo-off', 'p');
+    assert.deepEqual(rgb(off, 5, 55), [0, 0, 255], 'control: no hover without the option');
+
+    const report = await run(at('.pg-pseudo', page, { applyPseudoClasses: true }));
+    const on = await png('.pg-pseudo', 'p');
+    assert.deepEqual(rgb(on, 5, 55), [255, 0, 0], 'marked button shows its :hover style');
+    assert.deepEqual(rgb(on, 5, 85), [0, 0, 255], 'unmarked button does not');
+    assert.deepEqual(report.results[0]!.unreadableStylesheets, [`http://localhost:${port}/ext.css`]);
+  });
+});
+
+describe('in-page helpers (chromium)', () => {
+  it('elementBox: outlines, several and inset shadows, descendants, clamped to the document', async () => {
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage({ viewport: { width: 400, height: 300 } });
+      await page.setContent(`<body style="margin:0">
+<div id="a" style="position:absolute;left:50px;top:50px;width:100px;height:50px;
+  box-shadow: inset 0 0 40px red, 2px 0 0 1px rgb(0, 0, 0), -3px 0 5px rgba(0, 0, 0, 0.5)">
+  <span style="position:absolute;left:0;top:0;width:10px;height:10px;outline:4px solid lime;outline-offset:3px"></span>
+</div>
+<div id="edge" style="position:absolute;left:2px;top:2px;width:20px;height:20px;box-shadow:0 0 0 10px #000"></div></body>`);
+      const grown = await page.locator('#a').evaluate(elementBox, true);
+      // Outline of the child reaches 7px above and left of the card; the shadows reach 8px left, 3px right, 5px down.
+      assert.deepEqual(grown, { x: 42, y: 43, width: 111, height: 62 });
+      assert.deepEqual(await page.locator('#a').evaluate(elementBox, false), { x: 50, y: 50, width: 100, height: 50 });
+      assert.deepEqual(await page.locator('#edge').evaluate(elementBox, true), { x: 0, y: 0, width: 32, height: 32 });
+    } finally {
+      await browser.close();
+    }
+  });
+
+  it('forcePseudoClasses: copies right after the original, in groups and nesting; leaves :focus-within alone', async () => {
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      await page.setContent(`<style>
+a:hover, b:focus { color: red; }
+@supports (display: grid) { @media (min-width: 1px) { c:focus-visible { color: red; } } }
+d:focus-within { color: red; }
+e { &:active { color: red; } }
+</style>`);
+      assert.deepEqual(await page.evaluate(forcePseudoClasses), []);
+      const selectors = await page.evaluate(() => {
+        const out: string[] = [];
+        const walk = (list: CSSRuleList) => {
+          for (const r of Array.from(list)) {
+            if (r instanceof CSSStyleRule) out.push(r.selectorText);
+            const inner = (r as { cssRules?: CSSRuleList }).cssRules;
+            if (inner) walk(inner);
+          }
+        };
+        walk(document.styleSheets[0]!.cssRules);
+        return out;
+      });
+      assert.deepEqual(selectors, [
+        'a:hover, b:focus',
+        'a[data-pixelgate-hover], b[data-pixelgate-focus]',
+        'c:focus-visible',
+        'c[data-pixelgate-focus-visible]',
+        'd:focus-within',
+        'e',
+        '&:active',
+        '&[data-pixelgate-active]',
+      ]);
+    } finally {
+      await browser.close();
+    }
   });
 });
 

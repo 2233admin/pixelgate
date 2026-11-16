@@ -17,7 +17,20 @@ export {
   type PixelmatchOptions,
   type SsimOptions,
 } from './compare.js';
-export { captureAll, captureAria, stableShot, STABILIZE_CSS, type CaptureResult, type StableShot } from './capture.js';
+export {
+  captureAll,
+  captureAria,
+  stableShot,
+  capBox,
+  elementBox,
+  forcePseudoClasses,
+  PSEUDO_CLASSES,
+  STABILIZE_CSS,
+  type Box,
+  type CaptureResult,
+  type Shooter,
+  type StableShot,
+} from './capture.js';
 export { determineOutcome, applyOutcome, toResult, type Outcome } from './outcome.js';
 export {
   normalizeAria,

@@ -82,6 +82,7 @@ async function main(argv: string[]): Promise<number> {
           r.a11y?.length && `a11y ${r.a11y.map((v) => v.id).join(',')}`,
           r.overflowPx && `overflow ${r.overflowPx}px`,
           r.aria && r.aria.status !== 'unchanged' && `aria ${r.aria.status}`,
+          r.capped && `capped from ${r.capped.width}x${r.capped.height}`,
         ].filter(Boolean);
         log(`${mark[r.status] ?? '?'} ${r.target} ${r.name}${r.error ? `  ${r.error}` : ''}${checks.length ? `  [${checks.join('; ')}]` : ''}`);
       },

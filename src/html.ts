@@ -93,6 +93,7 @@ function card(r) {
   const meta = [r.target];
   if (r.diffRatio != null && (r.status === 'changed' || r.status === 'updated')) meta.push((r.diffRatio * 100).toFixed(3) + '% px (' + r.diffPixels + ')');
   if (r.sizeChanged) meta.push('size changed');
+  if (r.capped) meta.push('cut at the size cap (full ' + r.capped.width + 'x' + r.capped.height + ')');
   if (r.message && !r.sizeChanged) meta.push(r.message);
   const head = el('div', { class: 'head' }, [
     el('span', { class: 'tag', style: 'color:var(--' + r.status + ')', text: r.status }),
@@ -103,6 +104,7 @@ function card(r) {
   if (r.error) c.append(el('div', { class: 'err', text: r.error }));
   if (r.pageErrors?.length) c.append(el('div', { class: 'err', text: 'page errors:\\n' + r.pageErrors.join('\\n') }));
   if (r.blocked?.length) c.append(el('div', { class: 'err', text: 'blocked requests to: ' + r.blocked.join(', ') }));
+  if (r.unreadableStylesheets?.length) c.append(el('div', { class: 'err', text: 'pseudo-classes not forced in unreadable stylesheets: ' + r.unreadableStylesheets.join(', ') }));
   if (r.overflowPx) c.append(el('div', { class: 'err', text: 'overflow: the page reaches ' + r.overflowPx + 'px past the right edge of the viewport' }));
   if (r.a11y?.length) {
     const list = el('ul', { class: 'err', style: 'margin:0;padding:8px 12px 8px 28px' }, r.a11y.map((v) => el('li', {}, [
