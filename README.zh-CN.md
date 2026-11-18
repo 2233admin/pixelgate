@@ -4,15 +4,15 @@
 
 ![pixelgate：把截图当信号读](docs/images/hero.png)
 
-自托管的视觉回归门禁。MIT 许可，没有云服务，不用注册账号。
+界面改没改坏，先让它看一遍。它在你自己的机器上跑，MIT 许可，不用注册，图也不传到别人的服务器。
 
-pixelgate 用真浏览器（Playwright）渲染你的页面或 Storybook 故事，跟提交进仓库的基线逐像素比，写出一份静态审查页；有变化就以非 0 退出。这个退出码就是门禁：给 CI 用，给推送前的钩子用，也给自己检查界面改动的 coding agent 用。
+它用真浏览器打开你的页面（或 Storybook 里的每个故事）截图，跟上次存进仓库的图一个像素一个像素地比，然后给你一个网页，只列出变了的那几张；有变化就以非 0 退出。CI、推送前检查、自己写界面的 coding agent，都可以直接拿这个退出码当关卡。
 
 ## 为什么要它
 
-前端审查慢，是因为每次改动后都得有人把每一屏看一遍。pixelgate 替人去看：人（或 agent）只需要看真正变了的那几张，基线和当前并排放，变化的像素标出来。
+改完界面，最费时间的是把每一屏都看一遍。pixelgate 替你看：只有真变了的才拿给你，上次和这次并排放，变了的像素标红。
 
-Happo 这类托管服务做得很好，但渲染集群、比对引擎和审查界面都是闭源的。pixelgate 全在本地：基线在你的仓库里，报告就是一个装着 PNG 和一个 HTML 的文件夹。
+Happo 这类在线服务也能做，但截图、比对、审查都在人家那边，而且不开源。pixelgate 全在本地：存的图就在你的仓库里，报告就是一个文件夹，里面几张 PNG 加一个 HTML。
 
 ![一次运行经过的六站](docs/images/signal-path.png)
 
@@ -23,7 +23,7 @@ pnpm add -D pixelgate-cli playwright
 pnpm exec playwright install chromium   # 要测 firefox / webkit 再装它们
 ```
 
-npm 包名是 `pixelgate-cli`，装好后的命令叫 `pixelgate`。`playwright` 是 peer 依赖：pixelgate 用的是你项目里那份 Playwright，浏览器版本始终对得上。需要 Node 22.18+ 或 23.6+，`pixelgate.config.ts` 不用先编译就能读。
+npm 包名是 `pixelgate-cli`，装好后的命令叫 `pixelgate`。它用你项目里装的那份 Playwright 开浏览器，所以浏览器版本不会对不上。需要 Node 22.18+ 或 23.6+，配置文件写成 `.ts` 也不用先编译。
 
 ## 配置
 
