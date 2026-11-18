@@ -40,7 +40,8 @@
     "dist",
     "engine-manifest.json",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "skills"
   ],
   "engines": {
     "node": "^22.18.0 || >=23.6.0"

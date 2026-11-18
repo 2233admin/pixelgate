@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { CHECKS, findConfigFile, loadConfig } from './config.js';
@@ -21,6 +21,7 @@ Usage:
                      [--width <px>] [--height <px>] [--device-scale-factor <n>] [--allow-url <pattern>]...
                      [--config <file>] [--out-dir <dir>]
   pixelgate engine   install | path
+  pixelgate skill    [install [--dir <dir>]]
 
 run      Capture every snapshot, diff against baseline, write <outDir>/report/.
          Exit 0 = pass, 1 = statuses in \`failOn\` present, 2 = usage/config error.
@@ -46,6 +47,10 @@ explore  Property-based exploration of <url> with the vendored Bombadil engine (
 engine   install: fetch the engine for this platform into the cache (e.g. in CI) and print its path.
          path: print the path if it is already available (PIXELGATE_ENGINE or cache), without downloading.
          Exit 2 when it is not.
+
+skill    Print the agent skill: how a coding agent should run, read and approve pixelgate.
+         install writes it to <dir>/pixelgate/SKILL.md (default .claude/skills); re-run it
+         after upgrading pixelgate.
 
 --json   Print the report JSON to stdout (progress goes to stderr).`;
 
@@ -75,6 +80,7 @@ async function main(argv: string[]): Promise<number> {
       height: { type: 'string' },
       'device-scale-factor': { type: 'string' },
       'allow-url': { type: 'string', multiple: true },
+      dir: { type: 'string' },
       // Declared only to refuse it with a reason (mobile emulation is not offered for explore).
       device: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
@@ -199,6 +205,21 @@ report: ${path.join(r.dir, 'explore.html')}`,
     if ((sub !== 'install' && sub !== 'path') || positionals.length > 2) throw new Error('usage: pixelgate engine install | path');
     const p = await resolveEngine({ engine: values.engine, download: sub === 'install', log });
     console.log(p);
+    return 0;
+  }
+  if (cmd === 'skill') {
+    const sub = positionals[1];
+    if ((sub !== undefined && sub !== 'install') || positionals.length > 2) throw new Error('usage: pixelgate skill [install [--dir <dir>]]');
+    // skills/ sits one level up from both src/ and dist/, like package.json.
+    const text = readFileSync(new URL('../skills/pixelgate/SKILL.md', import.meta.url), 'utf8');
+    if (sub === undefined) {
+      process.stdout.write(text);
+      return 0;
+    }
+    const file = path.resolve(cwd, values.dir ?? path.join('.claude', 'skills'), 'pixelgate', 'SKILL.md');
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, text);
+    log(`wrote ${path.relative(cwd, file)}`);
     return 0;
   }
   log(`Unknown command "${cmd}"\n\n${HELP}`);
