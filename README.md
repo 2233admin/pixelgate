@@ -2,6 +2,10 @@
 
 [![CI](https://github.com/2233admin/pixelgate/actions/workflows/ci.yml/badge.svg)](https://github.com/2233admin/pixelgate/actions/workflows/ci.yml)
 
+English · [中文](README.zh-CN.md)
+
+![pixelgate: a screenshot read as a signal](docs/images/hero.png)
+
 Self-hosted visual regression testing. MIT licensed, no SaaS, no account.
 
 pixelgate renders your pages or Storybook stories in real browsers (Playwright),
@@ -18,6 +22,8 @@ snapshots that actually changed, side by side, with the changed pixels marked.
 Hosted services such as Happo do this well, but the rendering farm, the diff
 engine and the review UI are closed. pixelgate keeps all of it local:
 baselines live in your repo, the report is a folder of PNGs plus one HTML file.
+
+![The six stations of a run](docs/images/signal-path.png)
 
 ## Install
 
