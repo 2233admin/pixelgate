@@ -110,6 +110,7 @@ pixelgate approve --prune   # also delete baselines whose page/story is gone
 pixelgate approve --from <dir>  # accept from another run's out dir, e.g. a downloaded CI artifact
 pixelgate summary      # the last report as Markdown (PR comment, CI job summary)
 pixelgate run --json   # report JSON on stdout, for scripts and agents
+pixelgate skill        # the agent skill; `skill install` writes it for Claude Code
 pixelgate --version
 ```
 
@@ -631,7 +632,15 @@ too, add to `.gitattributes`:
 
 ## For coding agents
 
-[`skills/pixelgate/SKILL.md`](skills/pixelgate/SKILL.md) is an agent skill: how to check only what changed with `--only`, read the report, and approve baselines one by one. Copy the folder into your agent's skills directory (for Claude Code, `.claude/skills/pixelgate/`), or point your agent's instructions at it.
+[`skills/pixelgate/SKILL.md`](skills/pixelgate/SKILL.md) is an agent skill: how to check only what changed with `--only`, read the report, and approve baselines one by one. It ships in the package, so it always matches the installed CLI:
+
+```bash
+pixelgate skill                 # print it
+pixelgate skill install         # write .claude/skills/pixelgate/SKILL.md (Claude Code)
+pixelgate skill install --dir .agents/skills   # another agent's skills folder
+```
+
+Re-run `skill install` after upgrading pixelgate. `npx skills add 2233admin/pixelgate` also finds it, since it sits in `skills/`.
 
 ## CI and pull requests
 

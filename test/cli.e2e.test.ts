@@ -25,6 +25,23 @@ describe('cli', () => {
       assert.equal(r.stdout.trim(), pkg.version);
     }
   });
+
+  it('skill prints the agent skill, skill install writes it under --dir', async () => {
+    const skill = readFileSync(new URL('../skills/pixelgate/SKILL.md', import.meta.url), 'utf8');
+    assert.match(skill, /^---\nname: pixelgate\n/);
+    const printed = pixelgate(['skill']);
+    assert.equal(printed.status, 0, printed.stderr);
+    assert.equal(printed.stdout, skill);
+    const dir = await mkdtemp(path.join(process.env.PIXELGATE_TEST_TMP ?? os.tmpdir(), 'pixelgate-skill-'));
+    try {
+      const r = pixelgate(['skill', 'install', '--dir', 'agent-skills'], dir);
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(readFileSync(path.join(dir, 'agent-skills', 'pixelgate', 'SKILL.md'), 'utf8'), skill);
+      assert.equal(pixelgate(['skill', 'nope']).status, 2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('config loading under plain Node', () => {
