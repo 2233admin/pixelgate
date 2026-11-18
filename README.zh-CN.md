@@ -2,7 +2,7 @@
 
 [English](README.md) · 中文
 
-![pixelgate：把截图当信号读](docs/images/hero.png)
+![pixelgate：把截图当信号读](docs/images/hero.zh-CN.png)
 
 界面改没改坏，先让它看一遍。它在你自己的机器上跑，MIT 许可，不用注册，图也不传到别人的服务器。
 
@@ -14,7 +14,7 @@
 
 Happo 这类在线服务也能做，但截图、比对、审查都在人家那边，而且不开源。pixelgate 全在本地：存的图就在你的仓库里，报告就是一个文件夹，里面几张 PNG 加一个 HTML。
 
-![一次运行经过的六站](docs/images/signal-path.png)
+![一次运行经过的六站](docs/images/signal-path.zh-CN.png)
 
 ## 安装
 
