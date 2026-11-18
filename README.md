@@ -629,6 +629,10 @@ too, add to `.gitattributes`:
 *.aria.yml text eol=lf
 ```
 
+## For coding agents
+
+[`skills/pixelgate/SKILL.md`](skills/pixelgate/SKILL.md) is an agent skill: how to check only what changed with `--only`, read the report, and approve baselines one by one. Copy the folder into your agent's skills directory (for Claude Code, `.claude/skills/pixelgate/`), or point your agent's instructions at it.
+
 ## CI and pull requests
 
 This repository is also a GitHub Action. On a pull request it runs the gate,
